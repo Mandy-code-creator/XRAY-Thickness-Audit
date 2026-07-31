@@ -1,12 +1,11 @@
 
 import io
-import os
 from typing import List, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
 
 
 # =========================================================
@@ -19,14 +18,15 @@ st.set_page_config(
 )
 
 st.title("XRAY Coating Thickness Audit")
+st.success("Version 2026-07-31 — Formula: North/Center/South = Top + Back (NO division by 2)")
 st.caption(
-    "依鍍製別及上鍍層分類，分析各鋼捲北／中／南位置之實際鍍層值，"
-    "並與鍍層目標值及鍍層下限值比較。"
+    "Analyze coating thickness by Coating Type → Upper Coating "
+    "and compare each coil with Target and Lower Limit."
 )
 
 
 # =========================================================
-# 2. CONSTANTS
+# 2. REQUIRED COLUMNS
 # =========================================================
 REQUIRED_COLUMNS = [
     "鍍製別",
@@ -54,12 +54,18 @@ NUMERIC_COLUMNS = [
     "XRAY_A_B_S",
 ]
 
+TEXT_COLUMNS = [
+    "鍍製別",
+    "上鍍層",
+    "訂單號碼",
+    "產出鋼捲號碼",
+]
+
 
 # =========================================================
-# 3. HELPER FUNCTIONS
+# 3. FILE READING
 # =========================================================
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean column names and remove invisible spaces."""
     result = df.copy()
     result.columns = (
         result.columns.astype(str)
@@ -71,246 +77,225 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def read_uploaded_file(uploaded_file) -> pd.DataFrame:
-    """Read CSV or Excel uploaded through Streamlit."""
     filename = uploaded_file.name.lower()
 
     if filename.endswith(".csv"):
-        raw = uploaded_file.getvalue()
-
+        raw_bytes = uploaded_file.getvalue()
         encodings = ["utf-8-sig", "utf-8", "big5", "cp950"]
         last_error = None
 
         for encoding in encodings:
             try:
-                return pd.read_csv(io.BytesIO(raw), encoding=encoding)
+                return pd.read_csv(io.BytesIO(raw_bytes), encoding=encoding)
             except Exception as exc:
                 last_error = exc
 
-        raise ValueError(f"CSV 讀取失敗：{last_error}")
+        raise ValueError(f"Unable to read CSV file: {last_error}")
 
     if filename.endswith((".xlsx", ".xlsm", ".xls")):
         return pd.read_excel(uploaded_file)
 
-    raise ValueError("僅支援 CSV、XLSX、XLSM 或 XLS 檔案。")
+    raise ValueError("Supported formats: CSV, XLSX, XLSM and XLS.")
 
 
-def read_local_file(file_path: str) -> pd.DataFrame:
-    """Read a local file path when the app runs on the same computer."""
-    file_path = file_path.strip().strip('"')
-    if not file_path:
-        raise ValueError("請輸入檔案路徑。")
-
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"找不到檔案：{file_path}")
-
-    lower_path = file_path.lower()
-
-    if lower_path.endswith(".csv"):
-        encodings = ["utf-8-sig", "utf-8", "big5", "cp950"]
-        last_error = None
-
-        for encoding in encodings:
-            try:
-                return pd.read_csv(file_path, encoding=encoding)
-            except Exception as exc:
-                last_error = exc
-
-        raise ValueError(f"CSV 讀取失敗：{last_error}")
-
-    if lower_path.endswith((".xlsx", ".xlsm", ".xls")):
-        return pd.read_excel(file_path)
-
-    raise ValueError("僅支援 CSV、XLSX、XLSM 或 XLS 檔案。")
+# =========================================================
+# 4. DATA VALIDATION
+# =========================================================
+def validate_required_columns(df: pd.DataFrame) -> List[str]:
+    return [column for column in REQUIRED_COLUMNS if column not in df.columns]
 
 
-def convert_numeric(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
-    """Convert specified columns to numeric."""
-    result = df.copy()
-
-    for column in columns:
-        result[column] = (
-            result[column]
-            .astype(str)
-            .str.replace(",", "", regex=False)
-            .str.replace("，", "", regex=False)
-            .str.strip()
-        )
-        result[column] = pd.to_numeric(result[column], errors="coerce")
-
-    return result
-
-
-def validate_columns(df: pd.DataFrame) -> Tuple[bool, List[str]]:
-    missing = [column for column in REQUIRED_COLUMNS if column not in df.columns]
-    return len(missing) == 0, missing
+def clean_numeric_series(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(
+        series.astype(str)
+        .str.replace(",", "", regex=False)
+        .str.replace("，", "", regex=False)
+        .str.strip(),
+        errors="coerce",
+    )
 
 
 def prepare_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Validate and calculate all coating thickness metrics.
+    Correct calculation logic:
 
-    Position value:
-        North = (Top_N + Back_N) / 2
-        Center = (Top_C + Back_C) / 2
-        South = (Top_S + Back_S) / 2
+    North Thickness = XRAY_A_T_N + XRAY_A_B_N
+    Center Thickness = XRAY_A_T_C + XRAY_A_B_C
+    South Thickness = XRAY_A_T_S + XRAY_A_B_S
 
-    Coil average:
-        (North + Center + South) / 3
+    Coil Average Thickness =
+        (North Thickness + Center Thickness + South Thickness) / 3
     """
-    result = normalize_columns(df)
-    result = convert_numeric(result, NUMERIC_COLUMNS)
+    data = normalize_columns(df)
 
-    for column in ["鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼"]:
-        result[column] = result[column].astype("string").str.strip()
+    for column in TEXT_COLUMNS:
+        data[column] = data[column].astype("string").str.strip()
 
-    # Keep a reason for rejected rows
-    rejection_reasons = []
+    for column in NUMERIC_COLUMNS:
+        data[column] = clean_numeric_series(data[column])
 
-    for _, row in result.iterrows():
+    reject_reasons = []
+
+    for _, row in data.iterrows():
         reasons = []
 
-        if pd.isna(row["鍍製別"]) or str(row["鍍製別"]).strip() == "":
-            reasons.append("缺少鍍製別")
-        if pd.isna(row["上鍍層"]) or str(row["上鍍層"]).strip() == "":
-            reasons.append("缺少上鍍層")
-        if pd.isna(row["產出鋼捲號碼"]) or str(row["產出鋼捲號碼"]).strip() == "":
-            reasons.append("缺少產出鋼捲號碼")
+        for column in ["鍍製別", "上鍍層", "產出鋼捲號碼"]:
+            value = row[column]
+            if pd.isna(value) or str(value).strip() == "":
+                reasons.append(f"Missing {column}")
 
         for column in NUMERIC_COLUMNS:
             if pd.isna(row[column]):
-                reasons.append(f"{column}非數值或空白")
+                reasons.append(f"Invalid or missing {column}")
 
+        # Target and lower limit equal to zero are not valid for comparison.
         if pd.notna(row["鍍層目標值"]) and row["鍍層目標值"] <= 0:
-            reasons.append("鍍層目標值需大於0")
+            reasons.append("Target must be greater than 0")
 
         if pd.notna(row["鍍層下限值"]) and row["鍍層下限值"] <= 0:
-            reasons.append("鍍層下限值需大於0")
+            reasons.append("Lower Limit must be greater than 0")
 
         if (
             pd.notna(row["鍍層目標值"])
             and pd.notna(row["鍍層下限值"])
             and row["鍍層下限值"] > row["鍍層目標值"]
         ):
-            reasons.append("鍍層下限值高於目標值")
+            reasons.append("Lower Limit is greater than Target")
 
-        rejection_reasons.append("；".join(reasons))
+        reject_reasons.append("; ".join(reasons))
 
-    result["Reject_Reason"] = rejection_reasons
+    data["Reject Reason"] = reject_reasons
 
-    rejected = result[result["Reject_Reason"] != ""].copy()
-    valid = result[result["Reject_Reason"] == ""].copy()
+    rejected = data[data["Reject Reason"] != ""].copy()
+    valid = data[data["Reject Reason"] == ""].copy()
 
-    # Calculate position values
-    valid["北側鍍層值"] = (
+    if valid.empty:
+        return valid, rejected
+
+    # -----------------------------------------------------
+    # Correct coating thickness calculation: Top + Back
+    # -----------------------------------------------------
+    valid["North Thickness"] = (
         valid["XRAY_A_T_N"] + valid["XRAY_A_B_N"]
-    ) / 2.0
+    )
 
-    valid["中央鍍層值"] = (
+    valid["Center Thickness"] = (
         valid["XRAY_A_T_C"] + valid["XRAY_A_B_C"]
-    ) / 2.0
+    )
 
-    valid["南側鍍層值"] = (
+    valid["South Thickness"] = (
         valid["XRAY_A_T_S"] + valid["XRAY_A_B_S"]
-    ) / 2.0
+    )
 
-    # Coil average
-    valid["鋼捲平均鍍層值"] = valid[
-        ["北側鍍層值", "中央鍍層值", "南側鍍層值"]
-    ].mean(axis=1)
+    position_columns = [
+        "North Thickness",
+        "Center Thickness",
+        "South Thickness",
+    ]
+
+    valid["Coil Average Thickness"] = valid[position_columns].mean(axis=1)
 
     # Difference from target
-    valid["目標差異"] = (
-        valid["鋼捲平均鍍層值"] - valid["鍍層目標值"]
+    valid["Target Deviation"] = (
+        valid["Coil Average Thickness"] - valid["鍍層目標值"]
     )
 
-    valid["目標差異率(%)"] = np.where(
-        valid["鍍層目標值"] != 0,
-        valid["目標差異"] / valid["鍍層目標值"] * 100,
-        np.nan,
+    valid["Absolute Target Deviation"] = valid["Target Deviation"].abs()
+
+    valid["Target Deviation (%)"] = (
+        valid["Target Deviation"] / valid["鍍層目標值"] * 100
     )
 
-    # Margin above lower limit
-    valid["下限餘裕"] = (
-        valid["鋼捲平均鍍層值"] - valid["鍍層下限值"]
+    # Margin from lower limit
+    valid["Lower Limit Margin"] = (
+        valid["Coil Average Thickness"] - valid["鍍層下限值"]
     )
 
-    valid["下限餘裕率(%)"] = np.where(
-        valid["鍍層下限值"] != 0,
-        valid["下限餘裕"] / valid["鍍層下限值"] * 100,
-        np.nan,
+    valid["Lower Limit Margin (%)"] = (
+        valid["Lower Limit Margin"] / valid["鍍層下限值"] * 100
     )
 
-    # Position-level difference from target and lower limit
-    for label, column in [
-        ("北側", "北側鍍層值"),
-        ("中央", "中央鍍層值"),
-        ("南側", "南側鍍層值"),
-    ]:
-        valid[f"{label}目標差異"] = valid[column] - valid["鍍層目標值"]
-        valid[f"{label}下限餘裕"] = valid[column] - valid["鍍層下限值"]
+    # Position-level comparison
+    for position in ["North", "Center", "South"]:
+        thickness_column = f"{position} Thickness"
+        valid[f"{position} Target Deviation"] = (
+            valid[thickness_column] - valid["鍍層目標值"]
+        )
+        valid[f"{position} Lower Limit Margin"] = (
+            valid[thickness_column] - valid["鍍層下限值"]
+        )
 
-    # Horizontal uniformity
-    position_cols = ["北側鍍層值", "中央鍍層值", "南側鍍層值"]
+    # Cross-width uniformity
+    valid["Minimum Position Thickness"] = valid[position_columns].min(axis=1)
+    valid["Maximum Position Thickness"] = valid[position_columns].max(axis=1)
 
-    valid["最低位置鍍層值"] = valid[position_cols].min(axis=1)
-    valid["最高位置鍍層值"] = valid[position_cols].max(axis=1)
-    valid["橫向最大差異"] = (
-        valid["最高位置鍍層值"] - valid["最低位置鍍層值"]
+    valid["Cross-Width Range"] = (
+        valid["Maximum Position Thickness"]
+        - valid["Minimum Position Thickness"]
     )
 
-    valid["橫向差異率(%)"] = np.where(
-        valid["鋼捲平均鍍層值"] != 0,
-        valid["橫向最大差異"] / valid["鋼捲平均鍍層值"] * 100,
-        np.nan,
+    valid["Cross-Width Range (%)"] = (
+        valid["Cross-Width Range"]
+        / valid["Coil Average Thickness"]
+        * 100
     )
 
-    valid["最低位置"] = valid[position_cols].idxmin(axis=1).map(
+    min_position_column = valid[position_columns].idxmin(axis=1)
+    valid["Minimum Position"] = min_position_column.map(
         {
-            "北側鍍層值": "北側",
-            "中央鍍層值": "中央",
-            "南側鍍層值": "南側",
+            "North Thickness": "North",
+            "Center Thickness": "Center",
+            "South Thickness": "South",
         }
     )
 
-    # Coil judgments
-    valid["任一位置低於下限"] = (
-        valid["最低位置鍍層值"] < valid["鍍層下限值"]
+    # Status logic
+    valid["Any Position Below Lower Limit"] = (
+        valid["Minimum Position Thickness"] < valid["鍍層下限值"]
     )
 
-    valid["平均低於下限"] = (
-        valid["鋼捲平均鍍層值"] < valid["鍍層下限值"]
+    valid["Average Below Lower Limit"] = (
+        valid["Coil Average Thickness"] < valid["鍍層下限值"]
     )
 
-    valid["平均低於目標"] = (
-        valid["鋼捲平均鍍層值"] < valid["鍍層目標值"]
+    valid["Average Below Target"] = (
+        valid["Coil Average Thickness"] < valid["鍍層目標值"]
     )
 
-    valid["鋼捲判定"] = np.select(
+    valid["Coil Status"] = np.select(
         [
-            valid["任一位置低於下限"],
-            valid["平均低於目標"],
+            valid["Any Position Below Lower Limit"],
+            valid["Average Below Target"],
         ],
         [
-            "任一位置低於下限",
-            "平均低於目標",
+            "Any Position Below Lower Limit",
+            "Average Below Target",
         ],
-        default="符合要求",
+        default="Meets Requirement",
     )
 
     return valid, rejected
 
 
-def aggregate_by_coil(df: pd.DataFrame) -> pd.DataFrame:
+# =========================================================
+# 5. OPTIONAL COIL-LEVEL AGGREGATION
+# =========================================================
+def aggregate_to_one_row_per_coil(df: pd.DataFrame) -> pd.DataFrame:
     """
-    If the same coil appears multiple times, aggregate to one row per coil.
-    Numeric measurements use mean; target/lower limit use median.
+    If the same output coil appears multiple times, aggregate raw XRAY
+    measurements before recalculating all indicators.
     """
     if df.empty:
         return df.copy()
 
-    group_cols = ["鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼"]
+    group_columns = [
+        "鍍製別",
+        "上鍍層",
+        "訂單號碼",
+        "產出鋼捲號碼",
+    ]
 
-    agg_map = {
+    aggregation = {
         "鍍層目標值": "median",
         "鍍層下限值": "median",
         "XRAY_A_T_N": "mean",
@@ -322,66 +307,73 @@ def aggregate_by_coil(df: pd.DataFrame) -> pd.DataFrame:
     }
 
     grouped = (
-        df.groupby(group_cols, dropna=False, as_index=False)
-        .agg(agg_map)
+        df.groupby(group_columns, dropna=False, as_index=False)
+        .agg(aggregation)
     )
 
-    grouped, _ = prepare_data(grouped)
-    return grouped
+    recalculated, _ = prepare_data(grouped)
+    return recalculated
 
 
-def build_summary(df: pd.DataFrame) -> pd.DataFrame:
-    """Create management summary by 鍍製別 → 上鍍層."""
+# =========================================================
+# 6. SUMMARY TABLE
+# =========================================================
+def build_group_summary(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
     working = df.copy()
 
-    working["低於下限鋼捲"] = working["任一位置低於下限"].astype(int)
-    working["平均低於目標鋼捲"] = working["平均低於目標"].astype(int)
-    working["高於或等於目標鋼捲"] = (
-        working["鋼捲平均鍍層值"] >= working["鍍層目標值"]
+    working["Below Lower Limit Flag"] = (
+        working["Any Position Below Lower Limit"].astype(int)
+    )
+    working["Below Target Flag"] = working["Average Below Target"].astype(int)
+    working["At or Above Target Flag"] = (
+        working["Coil Average Thickness"] >= working["鍍層目標值"]
     ).astype(int)
 
     summary = (
         working.groupby(["鍍製別", "上鍍層"], dropna=False)
         .agg(
-            鋼捲數=("產出鋼捲號碼", "nunique"),
-            平均鍍層值=("鋼捲平均鍍層值", "mean"),
-            目標差異平均=("目標差異", "mean"),
-            目標差異中位數=("目標差異", "median"),
-            下限餘裕平均=("下限餘裕", "mean"),
-            最小下限餘裕=("下限餘裕", "min"),
-            任一位置低於下限鋼捲數=("低於下限鋼捲", "sum"),
-            平均低於目標鋼捲數=("平均低於目標鋼捲", "sum"),
-            高於或等於目標鋼捲數=("高於或等於目標鋼捲", "sum"),
-            平均橫向最大差異=("橫向最大差異", "mean"),
-            平均橫向差異率=("橫向差異率(%)", "mean"),
+            Coil_Count=("產出鋼捲號碼", "nunique"),
+            Average_Thickness=("Coil Average Thickness", "mean"),
+            Average_Target_Deviation=("Target Deviation", "mean"),
+            Median_Target_Deviation=("Target Deviation", "median"),
+            Average_Lower_Limit_Margin=("Lower Limit Margin", "mean"),
+            Minimum_Lower_Limit_Margin=("Lower Limit Margin", "min"),
+            Coils_With_Position_Below_Limit=("Below Lower Limit Flag", "sum"),
+            Coils_Below_Target=("Below Target Flag", "sum"),
+            Coils_At_Or_Above_Target=("At or Above Target Flag", "sum"),
+            Average_Cross_Width_Range=("Cross-Width Range", "mean"),
+            Average_Cross_Width_Range_Percent=("Cross-Width Range (%)", "mean"),
         )
         .reset_index()
     )
 
-    summary["任一位置低於下限率(%)"] = np.where(
-        summary["鋼捲數"] != 0,
-        summary["任一位置低於下限鋼捲數"] / summary["鋼捲數"] * 100,
-        np.nan,
+    summary["Position Below Limit Rate (%)"] = (
+        summary["Coils_With_Position_Below_Limit"]
+        / summary["Coil_Count"]
+        * 100
     )
 
-    summary["平均低於目標率(%)"] = np.where(
-        summary["鋼捲數"] != 0,
-        summary["平均低於目標鋼捲數"] / summary["鋼捲數"] * 100,
-        np.nan,
+    summary["Below Target Rate (%)"] = (
+        summary["Coils_Below_Target"]
+        / summary["Coil_Count"]
+        * 100
     )
 
-    summary["高於或等於目標率(%)"] = np.where(
-        summary["鋼捲數"] != 0,
-        summary["高於或等於目標鋼捲數"] / summary["鋼捲數"] * 100,
-        np.nan,
+    summary["At or Above Target Rate (%)"] = (
+        summary["Coils_At_Or_Above_Target"]
+        / summary["Coil_Count"]
+        * 100
     )
 
     return summary
 
 
+# =========================================================
+# 7. EXPORT
+# =========================================================
 def dataframe_to_excel_bytes(
     detail_df: pd.DataFrame,
     summary_df: pd.DataFrame,
@@ -390,43 +382,48 @@ def dataframe_to_excel_bytes(
     output = io.BytesIO()
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        detail_df.to_excel(writer, index=False, sheet_name="Coil_Detail")
-        summary_df.to_excel(writer, index=False, sheet_name="Group_Summary")
-        rejected_df.to_excel(writer, index=False, sheet_name="Rejected_Data")
+        detail_df.to_excel(writer, index=False, sheet_name="Coil Detail")
+        summary_df.to_excel(writer, index=False, sheet_name="Group Summary")
+        rejected_df.to_excel(writer, index=False, sheet_name="Rejected Data")
 
     output.seek(0)
     return output.getvalue()
 
 
-def format_table(df: pd.DataFrame, decimals: int = 2):
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    return df.style.format({col: f"{{:.{decimals}f}}" for col in numeric_cols})
+def style_dataframe(df: pd.DataFrame, decimals: int = 2):
+    numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+    format_map = {
+        column: f"{{:.{decimals}f}}" for column in numeric_columns
+    }
+    return df.style.format(format_map)
 
 
-def plot_coil_actual_vs_limits(df: pd.DataFrame):
-    plot_df = df.reset_index(drop=True).copy()
+# =========================================================
+# 8. CHART FUNCTIONS
+# =========================================================
+def plot_coil_average_vs_limits(df: pd.DataFrame):
+    chart_df = df.reset_index(drop=True).copy()
+    x = np.arange(len(chart_df))
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
-    x = np.arange(len(plot_df))
-
     ax.plot(
         x,
-        plot_df["鋼捲平均鍍層值"],
+        chart_df["Coil Average Thickness"],
         marker="o",
         linewidth=1.5,
         label="Coil Average",
     )
     ax.plot(
         x,
-        plot_df["鍍層目標值"],
+        chart_df["鍍層目標值"],
         linestyle="--",
         linewidth=1.5,
         label="Target",
     )
     ax.plot(
         x,
-        plot_df["鍍層下限值"],
+        chart_df["鍍層下限值"],
         linestyle=":",
         linewidth=1.8,
         label="Lower Limit",
@@ -438,11 +435,15 @@ def plot_coil_actual_vs_limits(df: pd.DataFrame):
     ax.grid(True, alpha=0.3)
     ax.legend()
 
-    step = max(1, len(plot_df) // 20)
-    tick_index = x[::step]
-    tick_labels = plot_df["產出鋼捲號碼"].astype(str).iloc[::step]
+    tick_step = max(1, len(chart_df) // 20)
+    tick_positions = x[::tick_step]
+    tick_labels = (
+        chart_df["產出鋼捲號碼"]
+        .astype(str)
+        .iloc[::tick_step]
+    )
 
-    ax.set_xticks(tick_index)
+    ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels, rotation=60, ha="right")
 
     for spine in ax.spines.values():
@@ -452,26 +453,84 @@ def plot_coil_actual_vs_limits(df: pd.DataFrame):
     return fig
 
 
-def plot_target_deviation(df: pd.DataFrame):
-    plot_df = df.reset_index(drop=True).copy()
+def select_top_deviation_data(
+    df: pd.DataFrame,
+    ranking_method: str,
+    top_n: int,
+) -> Tuple[pd.DataFrame, str, str]:
+    working = df.copy()
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-    x = np.arange(len(plot_df))
+    if ranking_method == "Absolute Target Deviation":
+        ranked = working.nlargest(top_n, "Absolute Target Deviation")
+        value_column = "Target Deviation"
+        title = f"Top {top_n} Coils by Absolute Target Deviation"
 
-    ax.bar(x, plot_df["目標差異"])
-    ax.axhline(0, linewidth=1.2)
+    elif ranking_method == "Above-Target Deviation":
+        ranked = working.nlargest(top_n, "Target Deviation")
+        value_column = "Target Deviation"
+        title = f"Top {top_n} Coils Above Target"
 
-    ax.set_title("Target Deviation by Coil", pad=16)
-    ax.set_xlabel("Output Coil Number")
-    ax.set_ylabel("Actual Average - Target")
-    ax.grid(True, axis="y", alpha=0.3)
+    elif ranking_method == "Below-Target Deviation":
+        ranked = working.nsmallest(top_n, "Target Deviation")
+        value_column = "Target Deviation"
+        title = f"Top {top_n} Coils Below Target"
 
-    step = max(1, len(plot_df) // 20)
-    tick_index = x[::step]
-    tick_labels = plot_df["產出鋼捲號碼"].astype(str).iloc[::step]
+    elif ranking_method == "Lower-Limit Risk":
+        ranked = working.nsmallest(top_n, "Lower Limit Margin")
+        value_column = "Lower Limit Margin"
+        title = f"Top {top_n} Coils Closest to or Below Lower Limit"
 
-    ax.set_xticks(tick_index)
-    ax.set_xticklabels(tick_labels, rotation=60, ha="right")
+    else:
+        ranked = working.nlargest(top_n, "Cross-Width Range")
+        value_column = "Cross-Width Range"
+        title = f"Top {top_n} Coils by Cross-Width Variation"
+
+    return ranked.copy(), value_column, title
+
+
+def plot_top_deviation(
+    ranked_df: pd.DataFrame,
+    value_column: str,
+    title: str,
+):
+    chart_df = ranked_df.sort_values(value_column, ascending=True).copy()
+
+    labels = (
+        chart_df["產出鋼捲號碼"].astype(str)
+        + " | "
+        + chart_df["鍍製別"].astype(str)
+        + " | "
+        + chart_df["上鍍層"].astype(str)
+    )
+
+    fig_height = max(6, len(chart_df) * 0.38)
+    fig, ax = plt.subplots(figsize=(13, fig_height))
+
+    bars = ax.barh(labels, chart_df[value_column])
+    ax.axvline(0, linewidth=1.0)
+
+    ax.set_title(title, pad=16)
+    ax.set_xlabel(value_column)
+    ax.set_ylabel("Output Coil Number | Coating Type | Upper Coating")
+    ax.grid(True, axis="x", alpha=0.3)
+
+    for bar, value in zip(bars, chart_df[value_column]):
+        offset = max(abs(chart_df[value_column]).max() * 0.01, 0.1)
+        if value >= 0:
+            x_position = value + offset
+            horizontal_alignment = "left"
+        else:
+            x_position = value - offset
+            horizontal_alignment = "right"
+
+        ax.text(
+            x_position,
+            bar.get_y() + bar.get_height() / 2,
+            f"{value:.2f}",
+            va="center",
+            ha=horizontal_alignment,
+            fontsize=8,
+        )
 
     for spine in ax.spines.values():
         spine.set_visible(True)
@@ -481,33 +540,37 @@ def plot_target_deviation(df: pd.DataFrame):
 
 
 def plot_position_profile(df: pd.DataFrame):
-    plot_df = df.reset_index(drop=True).copy()
+    chart_df = df.reset_index(drop=True).copy()
+    x = np.arange(len(chart_df))
 
     fig, ax = plt.subplots(figsize=(14, 6))
-    x = np.arange(len(plot_df))
 
-    ax.plot(x, plot_df["北側鍍層值"], marker="o", label="North")
-    ax.plot(x, plot_df["中央鍍層值"], marker="o", label="Center")
-    ax.plot(x, plot_df["南側鍍層值"], marker="o", label="South")
+    ax.plot(x, chart_df["North Thickness"], marker="o", label="North")
+    ax.plot(x, chart_df["Center Thickness"], marker="o", label="Center")
+    ax.plot(x, chart_df["South Thickness"], marker="o", label="South")
     ax.plot(
         x,
-        plot_df["鍍層下限值"],
+        chart_df["鍍層下限值"],
         linestyle=":",
         linewidth=1.8,
         label="Lower Limit",
     )
 
-    ax.set_title("North / Center / South Coating Profile", pad=16)
+    ax.set_title("North / Center / South Thickness Profile", pad=16)
     ax.set_xlabel("Output Coil Number")
     ax.set_ylabel("Coating Thickness")
     ax.grid(True, alpha=0.3)
     ax.legend()
 
-    step = max(1, len(plot_df) // 20)
-    tick_index = x[::step]
-    tick_labels = plot_df["產出鋼捲號碼"].astype(str).iloc[::step]
+    tick_step = max(1, len(chart_df) // 20)
+    tick_positions = x[::tick_step]
+    tick_labels = (
+        chart_df["產出鋼捲號碼"]
+        .astype(str)
+        .iloc[::tick_step]
+    )
 
-    ax.set_xticks(tick_index)
+    ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels, rotation=60, ha="right")
 
     for spine in ax.spines.values():
@@ -518,141 +581,120 @@ def plot_position_profile(df: pd.DataFrame):
 
 
 # =========================================================
-# 4. DATA SOURCE
+# 9. UPLOAD DATA
 # =========================================================
-st.sidebar.header("Data Source")
+st.sidebar.header("Upload Data")
 
-source_mode = st.sidebar.radio(
-    "Choose data source",
-    ["Upload file", "Local file path"],
+uploaded_file = st.sidebar.file_uploader(
+    "Upload FRPMES0131_CGL file",
+    type=["csv", "xlsx", "xlsm", "xls"],
+    help="Supported formats: CSV, XLSX, XLSM and XLS.",
 )
 
-raw_df = None
-
-if source_mode == "Upload file":
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload FRPMES0131_CGL file",
-        type=["csv", "xlsx", "xlsm", "xls"],
-    )
-
-    if uploaded_file is not None:
-        try:
-            raw_df = read_uploaded_file(uploaded_file)
-        except Exception as exc:
-            st.error(f"檔案讀取失敗：{exc}")
-            st.stop()
-
-else:
-    default_path = r"D:\Mandy\Source data\鍍鋅\鍍一\XRAY Thickness Audit\FRPMES0131_CGL.xlsx"
-
-    local_path = st.sidebar.text_input(
-        "Local file path",
-        value=default_path,
-    )
-
-    load_button = st.sidebar.button("Load local file", use_container_width=True)
-
-    if load_button:
-        try:
-            raw_df = read_local_file(local_path)
-            st.session_state["local_raw_df"] = raw_df
-        except Exception as exc:
-            st.error(f"本機檔案讀取失敗：{exc}")
-            st.stop()
-
-    if "local_raw_df" in st.session_state:
-        raw_df = st.session_state["local_raw_df"]
-
-
-if raw_df is None:
-    st.info("請先上傳資料檔，或輸入本機檔案完整路徑。")
+if uploaded_file is None:
+    st.info("Upload the FRPMES0131_CGL data file from the sidebar.")
     st.stop()
 
+try:
+    raw_df = read_uploaded_file(uploaded_file)
+except Exception as exc:
+    st.error(f"File reading failed: {exc}")
+    st.stop()
 
-# =========================================================
-# 5. VALIDATION AND PREPARATION
-# =========================================================
 raw_df = normalize_columns(raw_df)
 
-is_valid, missing_columns = validate_columns(raw_df)
+missing_columns = validate_required_columns(raw_df)
 
-if not is_valid:
-    st.error("資料缺少必要欄位：")
+if missing_columns:
+    st.error("The uploaded file is missing required columns:")
     st.code("\n".join(missing_columns))
-    st.write("目前欄位：")
-    st.write(list(raw_df.columns))
+
+    with st.expander("Columns found in the uploaded file"):
+        st.write(list(raw_df.columns))
+
     st.stop()
 
+
+# =========================================================
+# 10. PREPARE DATA
+# =========================================================
 valid_df, rejected_df = prepare_data(raw_df)
 
 if valid_df.empty:
-    st.error("沒有可分析的有效資料。請檢查欄位內容與數值格式。")
+    st.error(
+        "No valid rows are available for analysis. "
+        "Check Target, Lower Limit and XRAY values."
+    )
+
     if not rejected_df.empty:
         st.dataframe(rejected_df, use_container_width=True)
+
     st.stop()
 
 
 # =========================================================
-# 6. ANALYSIS LEVEL
+# 11. ANALYSIS SETTINGS
 # =========================================================
 st.sidebar.header("Analysis Settings")
 
-analysis_level = st.sidebar.radio(
-    "Data level",
-    ["One row per coil", "Original rows"],
+data_level = st.sidebar.radio(
+    "Data Level",
+    ["One Row per Coil", "Original Rows"],
+    index=0,
     help=(
-        "若同一產出鋼捲號碼出現多筆資料，One row per coil 會先彙整為一筆。"
+        "One Row per Coil aggregates repeated records of the same coil "
+        "before recalculating thickness."
     ),
 )
 
-if analysis_level == "One row per coil":
-    analysis_df = aggregate_by_coil(valid_df)
+if data_level == "One Row per Coil":
+    analysis_df = aggregate_to_one_row_per_coil(valid_df)
 else:
     analysis_df = valid_df.copy()
 
 
 # =========================================================
-# 7. FILTERS
+# 12. FILTERS
 # =========================================================
 st.sidebar.header("Filters")
 
-coating_types = sorted(
+coating_type_options = sorted(
     analysis_df["鍍製別"].dropna().astype(str).unique().tolist()
 )
 
 selected_coating_types = st.sidebar.multiselect(
-    "鍍製別",
-    options=coating_types,
-    default=coating_types,
+    "Coating Type",
+    options=coating_type_options,
+    default=coating_type_options,
 )
 
 filtered_df = analysis_df[
     analysis_df["鍍製別"].astype(str).isin(selected_coating_types)
 ].copy()
 
-upper_coatings = sorted(
+upper_coating_options = sorted(
     filtered_df["上鍍層"].dropna().astype(str).unique().tolist()
 )
 
 selected_upper_coatings = st.sidebar.multiselect(
-    "上鍍層",
-    options=upper_coatings,
-    default=upper_coatings,
+    "Upper Coating",
+    options=upper_coating_options,
+    default=upper_coating_options,
 )
 
 filtered_df = filtered_df[
     filtered_df["上鍍層"].astype(str).isin(selected_upper_coatings)
 ].copy()
 
-orders = sorted(
+order_options = sorted(
     filtered_df["訂單號碼"].dropna().astype(str).unique().tolist()
 )
 
 selected_orders = st.sidebar.multiselect(
-    "訂單號碼",
-    options=orders,
+    "Order Number",
+    options=order_options,
     default=[],
-    help="未選擇時顯示全部訂單。",
+    help="Leave empty to include all orders.",
 )
 
 if selected_orders:
@@ -660,57 +702,70 @@ if selected_orders:
         filtered_df["訂單號碼"].astype(str).isin(selected_orders)
     ].copy()
 
-coil_search = st.sidebar.text_input(
-    "產出鋼捲號碼搜尋",
+coil_keyword = st.sidebar.text_input(
+    "Search Output Coil Number",
     value="",
 )
 
-if coil_search.strip():
+if coil_keyword.strip():
     filtered_df = filtered_df[
         filtered_df["產出鋼捲號碼"]
         .astype(str)
-        .str.contains(coil_search.strip(), case=False, na=False)
+        .str.contains(coil_keyword.strip(), case=False, na=False)
     ].copy()
 
 filtered_df = filtered_df.sort_values(
     ["鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼"]
 ).reset_index(drop=True)
 
-
-# =========================================================
-# 8. MAIN DASHBOARD
-# =========================================================
 if filtered_df.empty:
-    st.warning("目前篩選條件沒有資料。")
+    st.warning("No data matches the selected filters.")
     st.stop()
 
-summary_df = build_summary(filtered_df)
 
-total_coils = filtered_df["產出鋼捲號碼"].nunique()
-below_lower_count = int(filtered_df["任一位置低於下限"].sum())
-below_target_count = int(filtered_df["平均低於目標"].sum())
-avg_target_diff = filtered_df["目標差異"].mean()
-avg_lower_margin = filtered_df["下限餘裕"].mean()
+# =========================================================
+# 13. KPI
+# =========================================================
+summary_df = build_group_summary(filtered_df)
+
+coil_count = filtered_df["產出鋼捲號碼"].nunique()
+below_limit_count = int(filtered_df["Any Position Below Lower Limit"].sum())
+below_target_count = int(filtered_df["Average Below Target"].sum())
+average_target_deviation = filtered_df["Target Deviation"].mean()
+average_lower_margin = filtered_df["Lower Limit Margin"].mean()
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
-kpi1.metric("鋼捲數", f"{total_coils:,}")
+kpi1.metric("Coil Count", f"{coil_count:,}")
+
 kpi2.metric(
-    "任一位置低於下限",
-    f"{below_lower_count:,}",
-    f"{below_lower_count / len(filtered_df) * 100:.1f}%",
+    "Any Position Below Limit",
+    f"{below_limit_count:,}",
+    f"{below_limit_count / len(filtered_df) * 100:.1f}%",
     delta_color="inverse",
 )
+
 kpi3.metric(
-    "平均低於目標",
+    "Average Below Target",
     f"{below_target_count:,}",
     f"{below_target_count / len(filtered_df) * 100:.1f}%",
     delta_color="inverse",
 )
-kpi4.metric("平均目標差異", f"{avg_target_diff:.2f}")
-kpi5.metric("平均下限餘裕", f"{avg_lower_margin:.2f}")
+
+kpi4.metric(
+    "Average Target Deviation",
+    f"{average_target_deviation:.2f}",
+)
+
+kpi5.metric(
+    "Average Lower-Limit Margin",
+    f"{average_lower_margin:.2f}",
+)
 
 
+# =========================================================
+# 14. TABS
+# =========================================================
 tab1, tab2, tab3, tab4 = st.tabs(
     [
         "Management Summary",
@@ -722,100 +777,106 @@ tab1, tab2, tab3, tab4 = st.tabs(
 
 
 # =========================================================
-# TAB 1. MANAGEMENT SUMMARY
+# TAB 1: MANAGEMENT SUMMARY
 # =========================================================
 with tab1:
-    st.subheader("Summary by 鍍製別 → 上鍍層")
+    st.subheader("Summary by Coating Type → Upper Coating")
 
-    summary_display_cols = [
+    summary_columns = [
         "鍍製別",
         "上鍍層",
-        "鋼捲數",
-        "平均鍍層值",
-        "目標差異平均",
-        "目標差異中位數",
-        "下限餘裕平均",
-        "最小下限餘裕",
-        "任一位置低於下限鋼捲數",
-        "任一位置低於下限率(%)",
-        "平均低於目標鋼捲數",
-        "平均低於目標率(%)",
-        "高於或等於目標鋼捲數",
-        "高於或等於目標率(%)",
-        "平均橫向最大差異",
-        "平均橫向差異率",
+        "Coil_Count",
+        "Average_Thickness",
+        "Average_Target_Deviation",
+        "Median_Target_Deviation",
+        "Average_Lower_Limit_Margin",
+        "Minimum_Lower_Limit_Margin",
+        "Coils_With_Position_Below_Limit",
+        "Position Below Limit Rate (%)",
+        "Coils_Below_Target",
+        "Below Target Rate (%)",
+        "Coils_At_Or_Above_Target",
+        "At or Above Target Rate (%)",
+        "Average_Cross_Width_Range",
+        "Average_Cross_Width_Range_Percent",
     ]
 
     st.dataframe(
-        format_table(summary_df[summary_display_cols], 2),
+        style_dataframe(summary_df[summary_columns], 2),
         use_container_width=True,
-        height=460,
+        height=480,
     )
 
     st.markdown(
         """
-        **判讀重點**
+        **Metric definitions**
 
-        - `目標差異`：鋼捲平均鍍層值 − 鍍層目標值。
-        - `下限餘裕`：鋼捲平均鍍層值 − 鍍層下限值。
-        - `任一位置低於下限率`：北、中央、南任一位置低於下限之鋼捲比例。
-        - `橫向最大差異`：北、中央、南三位置最大值 − 最小值。
+        - **Target Deviation** = Coil Average Thickness − Target.
+        - **Lower-Limit Margin** = Coil Average Thickness − Lower Limit.
+        - **Any Position Below Limit** means North, Center or South is below the Lower Limit.
+        - **Cross-Width Range** = Maximum position thickness − Minimum position thickness.
         """
     )
 
 
 # =========================================================
-# TAB 2. COIL DETAIL
+# TAB 2: COIL DETAIL
 # =========================================================
 with tab2:
     st.subheader("Coil-Level Analysis")
 
-    detail_cols = [
+    detail_columns = [
         "鍍製別",
         "上鍍層",
         "訂單號碼",
         "產出鋼捲號碼",
         "鍍層目標值",
         "鍍層下限值",
-        "北側鍍層值",
-        "中央鍍層值",
-        "南側鍍層值",
-        "鋼捲平均鍍層值",
-        "目標差異",
-        "目標差異率(%)",
-        "下限餘裕",
-        "下限餘裕率(%)",
-        "最低位置",
-        "最低位置鍍層值",
-        "橫向最大差異",
-        "橫向差異率(%)",
-        "鋼捲判定",
+        "XRAY_A_T_N",
+        "XRAY_A_B_N",
+        "North Thickness",
+        "XRAY_A_T_C",
+        "XRAY_A_B_C",
+        "Center Thickness",
+        "XRAY_A_T_S",
+        "XRAY_A_B_S",
+        "South Thickness",
+        "Coil Average Thickness",
+        "Target Deviation",
+        "Target Deviation (%)",
+        "Lower Limit Margin",
+        "Lower Limit Margin (%)",
+        "Minimum Position",
+        "Minimum Position Thickness",
+        "Cross-Width Range",
+        "Cross-Width Range (%)",
+        "Coil Status",
     ]
 
     st.dataframe(
-        format_table(filtered_df[detail_cols], 2),
+        style_dataframe(filtered_df[detail_columns], 2),
         use_container_width=True,
-        height=600,
+        height=620,
     )
 
     abnormal_df = filtered_df[
-        filtered_df["鋼捲判定"] != "符合要求"
+        filtered_df["Coil Status"] != "Meets Requirement"
     ].copy()
 
     st.subheader("Abnormal Coil List")
 
     if abnormal_df.empty:
-        st.success("目前篩選範圍內沒有異常鋼捲。")
+        st.success("No abnormal coils were found under the current filters.")
     else:
         st.dataframe(
-            format_table(abnormal_df[detail_cols], 2),
+            style_dataframe(abnormal_df[detail_columns], 2),
             use_container_width=True,
-            height=380,
+            height=400,
         )
 
     export_bytes = dataframe_to_excel_bytes(
-        detail_df=filtered_df[detail_cols],
-        summary_df=summary_df[summary_display_cols],
+        detail_df=filtered_df[detail_columns],
+        summary_df=summary_df[summary_columns],
         rejected_df=rejected_df,
     )
 
@@ -832,78 +893,154 @@ with tab2:
 
 
 # =========================================================
-# TAB 3. CHARTS
+# TAB 3: CHARTS
 # =========================================================
 with tab3:
     st.subheader("Visual Analysis")
 
-    max_chart_rows = st.slider(
-        "Maximum coils shown in charts",
-        min_value=10,
-        max_value=max(10, min(300, len(filtered_df))),
-        value=min(50, len(filtered_df)),
-        step=10 if len(filtered_df) >= 10 else 1,
+    maximum_chart_rows = min(300, len(filtered_df))
+
+    rows_to_show = st.slider(
+        "Number of coils shown in trend charts",
+        min_value=1,
+        max_value=max(1, maximum_chart_rows),
+        value=min(50, maximum_chart_rows),
+        step=1,
     )
 
-    chart_df = filtered_df.head(max_chart_rows).copy()
+    trend_df = filtered_df.head(rows_to_show).copy()
 
     st.pyplot(
-        plot_coil_actual_vs_limits(chart_df),
+        plot_coil_average_vs_limits(trend_df),
         use_container_width=True,
     )
 
-    st.pyplot(
-        plot_target_deviation(chart_df),
-        use_container_width=True,
+    st.divider()
+
+    st.subheader("Top Deviation Ranking")
+
+    ranking_method = st.selectbox(
+        "Ranking Method",
+        [
+            "Absolute Target Deviation",
+            "Above-Target Deviation",
+            "Below-Target Deviation",
+            "Lower-Limit Risk",
+            "Cross-Width Variation",
+        ],
+        index=0,
+    )
+
+    top_n = st.slider(
+        "Top N",
+        min_value=5,
+        max_value=min(50, len(filtered_df)),
+        value=min(20, len(filtered_df)),
+        step=1,
+    )
+
+    ranked_df, ranking_value_column, ranking_title = (
+        select_top_deviation_data(
+            filtered_df,
+            ranking_method,
+            top_n,
+        )
     )
 
     st.pyplot(
-        plot_position_profile(chart_df),
+        plot_top_deviation(
+            ranked_df,
+            ranking_value_column,
+            ranking_title,
+        ),
+        use_container_width=True,
+    )
+
+    ranking_table_columns = [
+        "鍍製別",
+        "上鍍層",
+        "訂單號碼",
+        "產出鋼捲號碼",
+        "鍍層目標值",
+        "鍍層下限值",
+        "North Thickness",
+        "Center Thickness",
+        "South Thickness",
+        "Coil Average Thickness",
+        "Target Deviation",
+        "Absolute Target Deviation",
+        "Lower Limit Margin",
+        "Cross-Width Range",
+        "Coil Status",
+    ]
+
+    st.dataframe(
+        style_dataframe(ranked_df[ranking_table_columns], 2),
+        use_container_width=True,
+        height=500,
+    )
+
+    st.divider()
+
+    st.pyplot(
+        plot_position_profile(trend_df),
         use_container_width=True,
     )
 
 
 # =========================================================
-# TAB 4. DATA QUALITY
+# TAB 4: DATA QUALITY
 # =========================================================
 with tab4:
     st.subheader("Data Quality")
 
-    q1, q2, q3 = st.columns(3)
-    q1.metric("原始筆數", f"{len(raw_df):,}")
-    q2.metric("有效筆數", f"{len(valid_df):,}")
-    q3.metric("排除筆數", f"{len(rejected_df):,}")
+    quality1, quality2, quality3 = st.columns(3)
+
+    quality1.metric("Original Rows", f"{len(raw_df):,}")
+    quality2.metric("Valid Rows", f"{len(valid_df):,}")
+    quality3.metric("Rejected Rows", f"{len(rejected_df):,}")
+
+    st.markdown(
+        """
+        Rows are rejected when required values are missing, XRAY values are
+        nonnumeric, Target or Lower Limit is zero or negative, or Lower Limit
+        is greater than Target.
+        """
+    )
 
     if rejected_df.empty:
-        st.success("沒有被排除的資料。")
+        st.success("No rejected rows.")
     else:
-        rejected_cols = [
-            column
-            for column in [
-                "鍍製別",
-                "上鍍層",
-                "訂單號碼",
-                "產出鋼捲號碼",
-                "鍍層目標值",
-                "鍍層下限值",
-                "Reject_Reason",
-            ]
-            if column in rejected_df.columns
+        rejected_columns = [
+            "鍍製別",
+            "上鍍層",
+            "訂單號碼",
+            "產出鋼捲號碼",
+            "鍍層目標值",
+            "鍍層下限值",
+            "XRAY_A_T_N",
+            "XRAY_A_T_C",
+            "XRAY_A_T_S",
+            "XRAY_A_B_N",
+            "XRAY_A_B_C",
+            "XRAY_A_B_S",
+            "Reject Reason",
         ]
 
         st.dataframe(
-            rejected_df[rejected_cols],
+            rejected_df[rejected_columns],
             use_container_width=True,
-            height=500,
+            height=550,
         )
 
 
 # =========================================================
-# 9. FOOTNOTE
+# 15. FOOTNOTE
 # =========================================================
 st.caption(
-    "計算方式：北側=(XRAY_A_T_N+XRAY_A_B_N)/2；"
-    "中央=(XRAY_A_T_C+XRAY_A_B_C)/2；"
-    "南側=(XRAY_A_T_S+XRAY_A_B_S)/2；"
-    "鋼捲平均=(北側+中央+南側)/3。"
+    "Calculation: "
+    "North = XRAY_A_T_N + XRAY_A_B_N; "
+    "Center = XRAY_A_T_C + XRAY_A_B_C; "
+    "South = XRAY_A_T_S + XRAY_A_B_S; "
+    "Coil Average = (North + Center + South) / 3."
 )
