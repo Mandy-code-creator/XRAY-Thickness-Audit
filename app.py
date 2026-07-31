@@ -395,6 +395,9 @@ def aggregate_to_one_row_per_coil(
 def build_group_summary(
     df: pd.DataFrame,
     uneven_threshold_percent: float = 10.0,
+    high_stability_threshold: float = 3.0,
+    medium_stability_threshold: float = 6.0,
+    minimum_reliable_coils: int = 5,
 ) -> pd.DataFrame:
     """
     Grouping level:
@@ -568,6 +571,48 @@ def build_group_summary(
     )
 
     summary["Uneven Threshold (%)"] = uneven_threshold_percent
+
+    summary["Relative Stability Variation (%)"] = np.where(
+        summary["鍍層目標值"] != 0,
+        summary["Target_Deviation_Std"]
+        / summary["鍍層目標值"]
+        * 100,
+        np.nan,
+    )
+
+    summary["Relative P10-P90 Range (%)"] = np.where(
+        summary["鍍層目標值"] != 0,
+        summary["Target_Deviation_P10_P90_Range"]
+        / summary["鍍層目標值"]
+        * 100,
+        np.nan,
+    )
+
+    summary["Stability Grade"] = np.select(
+        [
+            summary["Coil_Count"] < minimum_reliable_coils,
+            summary["Relative Stability Variation (%)"]
+            <= high_stability_threshold,
+            summary["Relative Stability Variation (%)"]
+            <= medium_stability_threshold,
+        ],
+        [
+            "Insufficient Data",
+            "High Stability",
+            "Medium Stability",
+        ],
+        default="Low Stability",
+    )
+
+    summary["Stability Threshold High (%)"] = (
+        high_stability_threshold
+    )
+    summary["Stability Threshold Medium (%)"] = (
+        medium_stability_threshold
+    )
+    summary["Minimum Reliable Coils"] = (
+        minimum_reliable_coils
+    )
 
     return summary
 
@@ -898,14 +943,13 @@ def plot_stability_by_coating_type(
     coating_type: str,
 ):
     """
-    Stability is shown with two spread indicators:
-    - Standard deviation of Target Deviation
-    - P10-P90 range of Target Deviation
+    Main stability chart:
+    Relative Stability Variation (%) = Std(Target Deviation) / Target × 100
 
-    Lower values mean more stable coating thickness.
+    Lower values mean greater stability.
     """
     chart_df = coating_summary.copy().sort_values(
-        "Target_Deviation_P10_P90_Range",
+        "Relative Stability Variation (%)",
         ascending=True,
     )
 
@@ -917,57 +961,74 @@ def plot_stability_by_coating_type(
         + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
     )
 
-    y = np.arange(len(chart_df))
-    bar_height = 0.36
-    fig_height = max(4.8, len(chart_df) * 0.50)
-
+    fig_height = max(5.0, len(chart_df) * 0.52)
     fig, ax = plt.subplots(figsize=(13, fig_height))
 
-    std_bars = ax.barh(
-        y - bar_height / 2,
-        chart_df["Target_Deviation_Std"],
-        height=bar_height,
-        label="Target Deviation Std",
+    bars = ax.barh(
+        chart_df["Standard Label"],
+        chart_df["Relative Stability Variation (%)"],
     )
 
-    range_bars = ax.barh(
-        y + bar_height / 2,
-        chart_df["Target_Deviation_P10_P90_Range"],
-        height=bar_height,
-        label="Target Deviation P10-P90 Range",
+    high_threshold = (
+        chart_df["Stability Threshold High (%)"].iloc[0]
+    )
+    medium_threshold = (
+        chart_df["Stability Threshold Medium (%)"].iloc[0]
     )
 
-    ax.set_yticks(y)
-    ax.set_yticklabels(chart_df["Standard Label"])
+    ax.axvline(
+        high_threshold,
+        linestyle="--",
+        linewidth=1.4,
+        label=f"High Stability Limit ({high_threshold:.1f}%)",
+    )
+    ax.axvline(
+        medium_threshold,
+        linestyle=":",
+        linewidth=1.8,
+        label=f"Medium Stability Limit ({medium_threshold:.1f}%)",
+    )
+
     ax.set_title(
-        f"{coating_type} — Coating Thickness Stability",
+        f"{coating_type} — Stability Grade",
         pad=16,
     )
-    ax.set_xlabel("Deviation Spread (Lower Is More Stable)")
+    ax.set_xlabel(
+        "Relative Stability Variation (%) — Lower Is More Stable"
+    )
     ax.set_ylabel("Upper Coating | Target | Lower Limit")
     ax.grid(True, axis="x", alpha=0.3)
     ax.legend()
 
     max_value = max(
-        chart_df["Target_Deviation_Std"].max(),
-        chart_df["Target_Deviation_P10_P90_Range"].max(),
+        chart_df["Relative Stability Variation (%)"].max(),
+        medium_threshold,
         1,
     )
-    offset = max_value * 0.012
+    offset = max_value * 0.015
 
-    for bars in [std_bars, range_bars]:
-        for bar in bars:
-            value = bar.get_width()
-            ax.text(
-                value + offset,
-                bar.get_y() + bar.get_height() / 2,
-                f"{value:.2f}",
-                va="center",
-                ha="left",
-                fontsize=8,
-            )
+    for bar, (_, row) in zip(
+        bars,
+        chart_df.iterrows(),
+    ):
+        value = bar.get_width()
+        grade = row["Stability Grade"]
+        coil_count = int(row["Coil_Count"])
 
-    ax.set_xlim(0, max_value * 1.16)
+        ax.text(
+            value + offset,
+            bar.get_y() + bar.get_height() / 2,
+            f"{value:.2f}% | {grade} | n={coil_count}",
+            va="center",
+            ha="left",
+            fontsize=8,
+        )
+
+    ax.set_xlim(
+        0,
+        max_value * 1.38,
+    )
+
     return finalize_chart(fig)
 
 
@@ -1651,23 +1712,70 @@ if filtered_df.empty:
 # 11. KPI AND SUMMARY
 # =========================================================
 if view_mode == "Overall View":
-    uneven_threshold_percent = st.slider(
-        "Cross-Width Unevenness Threshold (%)",
-        min_value=1.0,
-        max_value=30.0,
-        value=10.0,
-        step=0.5,
+    threshold_col1, threshold_col2, threshold_col3 = st.columns(3)
+
+    with threshold_col1:
+        uneven_threshold_percent = st.slider(
+            "Cross-Width Unevenness Threshold (%)",
+            min_value=1.0,
+            max_value=30.0,
+            value=10.0,
+            step=0.5,
+            help=(
+                "A coil is classified as uneven when "
+                "Cross-Width Range (%) exceeds this threshold."
+            ),
+        )
+
+    with threshold_col2:
+        high_stability_threshold = st.number_input(
+            "High Stability Limit (%)",
+            min_value=0.1,
+            max_value=20.0,
+            value=3.0,
+            step=0.5,
+            help=(
+                "Relative Stability Variation at or below this value "
+                "is classified as High Stability."
+            ),
+        )
+
+    with threshold_col3:
+        medium_stability_threshold = st.number_input(
+            "Medium Stability Limit (%)",
+            min_value=0.5,
+            max_value=30.0,
+            value=6.0,
+            step=0.5,
+            help=(
+                "Values above the High limit and at or below this value "
+                "are classified as Medium Stability."
+            ),
+        )
+
+    minimum_reliable_coils = st.number_input(
+        "Minimum Coil Count for Stability Judgment",
+        min_value=2,
+        max_value=100,
+        value=5,
+        step=1,
         help=(
-            "A coil is classified as uneven when "
-            "Cross-Width Range (%) exceeds this threshold."
+            "Groups below this coil count are classified as "
+            "Insufficient Data."
         ),
     )
 else:
     uneven_threshold_percent = 10.0
+    high_stability_threshold = 3.0
+    medium_stability_threshold = 6.0
+    minimum_reliable_coils = 5
 
 summary_df = build_group_summary(
     filtered_df,
     uneven_threshold_percent,
+    high_stability_threshold,
+    medium_stability_threshold,
+    minimum_reliable_coils,
 )
 
 coil_count = filtered_df[
@@ -1786,10 +1894,13 @@ if view_mode == "Overall View":
 
     elif overall_section == "Stability Analysis":
         st.info(
-            "Lower Target Deviation Std and lower P10-P90 Range "
-            "indicate a more stable process. Groups with one coil "
-            "have a standard deviation of 0 and should be interpreted "
-            "together with Coil Count."
+            "Stability is judged by Relative Stability Variation (%) = "
+            "Target Deviation Std / Target × 100. "
+            f"High Stability ≤ {high_stability_threshold:.1f}%; "
+            f"Medium Stability ≤ {medium_stability_threshold:.1f}%; "
+            "higher values are Low Stability. "
+            f"Groups with fewer than {minimum_reliable_coils} coils are "
+            "classified as Insufficient Data."
         )
 
         for coating_type in coating_types:
@@ -1817,10 +1928,12 @@ if view_mode == "Overall View":
                 "Average_Target_Deviation",
                 "Median_Target_Deviation",
                 "Target_Deviation_Std",
+                "Relative Stability Variation (%)",
                 "Target_Deviation_P10",
                 "Target_Deviation_P90",
                 "Target_Deviation_P10_P90_Range",
-                "Deviation_CV_vs_Target (%)",
+                "Relative P10-P90 Range (%)",
+                "Stability Grade",
             ]
 
             show_dataframe(
@@ -1938,10 +2051,12 @@ if view_mode == "Overall View":
             "Coils_At_Or_Above_Target",
             "At or Above Target Rate (%)",
             "Target_Deviation_Std",
+            "Relative Stability Variation (%)",
             "Target_Deviation_P10",
             "Target_Deviation_P90",
             "Target_Deviation_P10_P90_Range",
-            "Deviation_CV_vs_Target (%)",
+            "Relative P10-P90 Range (%)",
+            "Stability Grade",
             "Average_Cross_Width_Range",
             "Average_Cross_Width_Range_Percent",
             "Excess_Coating_Coils",
