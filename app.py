@@ -394,7 +394,20 @@ def aggregate_to_one_row_per_coil(
 @st.cache_data(show_spinner=False)
 def build_group_summary(
     df: pd.DataFrame,
+    uneven_threshold_percent: float = 10.0,
 ) -> pd.DataFrame:
+    """
+    Grouping level:
+        Coating Type -> Upper Coating -> Target -> Lower Limit
+
+    Stability:
+        standard deviation and P10-P90 range of Target Deviation
+
+    Three risks:
+        1. Any position below Lower Limit
+        2. Coil average above Target (excess coating)
+        3. Cross-width range percentage above selected threshold
+    """
     if df.empty:
         return pd.DataFrame()
 
@@ -413,14 +426,26 @@ def build_group_summary(
         >= working["鍍層目標值"]
     ).astype(int)
 
+    working["Excess Coating Flag"] = (
+        working["Coil Average Thickness"]
+        > working["鍍層目標值"]
+    ).astype(int)
+
+    working["Uneven Coating Flag"] = (
+        working["Cross-Width Range (%)"]
+        > uneven_threshold_percent
+    ).astype(int)
+
+    group_columns = [
+        "鍍製別",
+        "上鍍層",
+        "鍍層目標值",
+        "鍍層下限值",
+    ]
+
     summary = (
         working.groupby(
-            [
-                "鍍製別",
-                "上鍍層",
-                "鍍層目標值",
-                "鍍層下限值",
-            ],
+            group_columns,
             dropna=False,
         )
         .agg(
@@ -429,6 +454,10 @@ def build_group_summary(
                 "Coil Average Thickness",
                 "mean",
             ),
+            Thickness_Std=(
+                "Coil Average Thickness",
+                "std",
+            ),
             Average_Target_Deviation=(
                 "Target Deviation",
                 "mean",
@@ -436,6 +465,18 @@ def build_group_summary(
             Median_Target_Deviation=(
                 "Target Deviation",
                 "median",
+            ),
+            Target_Deviation_Std=(
+                "Target Deviation",
+                "std",
+            ),
+            Target_Deviation_P10=(
+                "Target Deviation",
+                lambda series: series.quantile(0.10),
+            ),
+            Target_Deviation_P90=(
+                "Target Deviation",
+                lambda series: series.quantile(0.90),
             ),
             Average_Lower_Limit_Margin=(
                 "Lower Limit Margin",
@@ -457,6 +498,14 @@ def build_group_summary(
                 "At or Above Target Flag",
                 "sum",
             ),
+            Excess_Coating_Coils=(
+                "Excess Coating Flag",
+                "sum",
+            ),
+            Uneven_Coating_Coils=(
+                "Uneven Coating Flag",
+                "sum",
+            ),
             Average_Cross_Width_Range=(
                 "Cross-Width Range",
                 "mean",
@@ -467,6 +516,25 @@ def build_group_summary(
             ),
         )
         .reset_index()
+    )
+
+    # A group containing only one coil has no sample standard deviation.
+    summary["Thickness_Std"] = summary["Thickness_Std"].fillna(0)
+    summary["Target_Deviation_Std"] = (
+        summary["Target_Deviation_Std"].fillna(0)
+    )
+
+    summary["Target_Deviation_P10_P90_Range"] = (
+        summary["Target_Deviation_P90"]
+        - summary["Target_Deviation_P10"]
+    )
+
+    summary["Deviation_CV_vs_Target (%)"] = np.where(
+        summary["鍍層目標值"] != 0,
+        summary["Target_Deviation_Std"]
+        / summary["鍍層目標值"]
+        * 100,
+        np.nan,
     )
 
     summary["Position Below Limit Rate (%)"] = (
@@ -486,6 +554,20 @@ def build_group_summary(
         / summary["Coil_Count"]
         * 100
     )
+
+    summary["Excess Coating Rate (%)"] = (
+        summary["Excess_Coating_Coils"]
+        / summary["Coil_Count"]
+        * 100
+    )
+
+    summary["Uneven Coating Rate (%)"] = (
+        summary["Uneven_Coating_Coils"]
+        / summary["Coil_Count"]
+        * 100
+    )
+
+    summary["Uneven Threshold (%)"] = uneven_threshold_percent
 
     return summary
 
@@ -807,6 +889,172 @@ def plot_coil_count_by_coating_type(
         )
 
     ax.set_xlim(0, max_count * 1.12)
+    return finalize_chart(fig)
+
+
+
+def plot_stability_by_coating_type(
+    coating_summary: pd.DataFrame,
+    coating_type: str,
+):
+    """
+    Stability is shown with two spread indicators:
+    - Standard deviation of Target Deviation
+    - P10-P90 range of Target Deviation
+
+    Lower values mean more stable coating thickness.
+    """
+    chart_df = coating_summary.copy().sort_values(
+        "Target_Deviation_P10_P90_Range",
+        ascending=True,
+    )
+
+    chart_df["Standard Label"] = (
+        chart_df["上鍍層"].astype(str)
+        + " | Target "
+        + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
+        + " | Lower "
+        + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
+    )
+
+    y = np.arange(len(chart_df))
+    bar_height = 0.36
+    fig_height = max(4.8, len(chart_df) * 0.50)
+
+    fig, ax = plt.subplots(figsize=(13, fig_height))
+
+    std_bars = ax.barh(
+        y - bar_height / 2,
+        chart_df["Target_Deviation_Std"],
+        height=bar_height,
+        label="Target Deviation Std",
+    )
+
+    range_bars = ax.barh(
+        y + bar_height / 2,
+        chart_df["Target_Deviation_P10_P90_Range"],
+        height=bar_height,
+        label="Target Deviation P10-P90 Range",
+    )
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(chart_df["Standard Label"])
+    ax.set_title(
+        f"{coating_type} — Coating Thickness Stability",
+        pad=16,
+    )
+    ax.set_xlabel("Deviation Spread (Lower Is More Stable)")
+    ax.set_ylabel("Upper Coating | Target | Lower Limit")
+    ax.grid(True, axis="x", alpha=0.3)
+    ax.legend()
+
+    max_value = max(
+        chart_df["Target_Deviation_Std"].max(),
+        chart_df["Target_Deviation_P10_P90_Range"].max(),
+        1,
+    )
+    offset = max_value * 0.012
+
+    for bars in [std_bars, range_bars]:
+        for bar in bars:
+            value = bar.get_width()
+            ax.text(
+                value + offset,
+                bar.get_y() + bar.get_height() / 2,
+                f"{value:.2f}",
+                va="center",
+                ha="left",
+                fontsize=8,
+            )
+
+    ax.set_xlim(0, max_value * 1.16)
+    return finalize_chart(fig)
+
+
+def plot_three_risks_by_coating_type(
+    coating_summary: pd.DataFrame,
+    coating_type: str,
+):
+    """
+    Three non-exclusive risk rates:
+    - Below Lower Limit
+    - Excess Coating
+    - Cross-Width Unevenness
+    """
+    chart_df = coating_summary.copy()
+
+    chart_df["Standard Label"] = (
+        chart_df["上鍍層"].astype(str)
+        + " | Target "
+        + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
+        + " | Lower "
+        + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
+    )
+
+    chart_df = chart_df.sort_values(
+        "Position Below Limit Rate (%)",
+        ascending=True,
+    )
+
+    y = np.arange(len(chart_df))
+    bar_height = 0.24
+    fig_height = max(5.2, len(chart_df) * 0.58)
+
+    fig, ax = plt.subplots(figsize=(13, fig_height))
+
+    below_bars = ax.barh(
+        y - bar_height,
+        chart_df["Position Below Limit Rate (%)"],
+        height=bar_height,
+        label="Below Lower Limit",
+    )
+
+    excess_bars = ax.barh(
+        y,
+        chart_df["Excess Coating Rate (%)"],
+        height=bar_height,
+        label="Excess Coating",
+    )
+
+    uneven_bars = ax.barh(
+        y + bar_height,
+        chart_df["Uneven Coating Rate (%)"],
+        height=bar_height,
+        label="Cross-Width Unevenness",
+    )
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(chart_df["Standard Label"])
+    ax.set_title(
+        f"{coating_type} — Three-Risk Overview",
+        pad=16,
+    )
+    ax.set_xlabel("Coil Risk Rate (%)")
+    ax.set_ylabel("Upper Coating | Target | Lower Limit")
+    ax.grid(True, axis="x", alpha=0.3)
+    ax.legend()
+
+    max_rate = max(
+        chart_df["Position Below Limit Rate (%)"].max(),
+        chart_df["Excess Coating Rate (%)"].max(),
+        chart_df["Uneven Coating Rate (%)"].max(),
+        1,
+    )
+    offset = max_rate * 0.010
+
+    for bars in [below_bars, excess_bars, uneven_bars]:
+        for bar in bars:
+            value = bar.get_width()
+            ax.text(
+                value + offset,
+                bar.get_y() + bar.get_height() / 2,
+                f"{value:.1f}%",
+                va="center",
+                ha="left",
+                fontsize=7.5,
+            )
+
+    ax.set_xlim(0, max(100, max_rate * 1.14))
     return finalize_chart(fig)
 
 
@@ -1225,18 +1473,45 @@ if valid_df.empty:
 # =========================================================
 # 9. VIEW AND DATA LEVEL
 # =========================================================
-st.warning("FINAL TWO-VIEW BUILD: choose Overall View or Detailed View below.")
 st.subheader("Select Analysis View")
 
-view_mode = st.radio(
-    "Analysis View",
-    [
+if "analysis_view" not in st.session_state:
+    st.session_state["analysis_view"] = "Overall View"
+
+view_col1, view_col2 = st.columns(2)
+
+with view_col1:
+    if st.button(
         "Overall View",
+        key="select_overall_view",
+        type=(
+            "primary"
+            if st.session_state["analysis_view"] == "Overall View"
+            else "secondary"
+        ),
+        use_container_width=True,
+    ):
+        st.session_state["analysis_view"] = "Overall View"
+        st.rerun()
+
+with view_col2:
+    if st.button(
         "Detailed View",
-    ],
-    index=0,
-    horizontal=True,
-    label_visibility="collapsed",
+        key="select_detailed_view",
+        type=(
+            "primary"
+            if st.session_state["analysis_view"] == "Detailed View"
+            else "secondary"
+        ),
+        use_container_width=True,
+    ):
+        st.session_state["analysis_view"] = "Detailed View"
+        st.rerun()
+
+view_mode = st.session_state["analysis_view"]
+
+st.caption(
+    "Current view: " + view_mode
 )
 
 st.sidebar.header("Analysis Settings")
@@ -1375,7 +1650,25 @@ if filtered_df.empty:
 # =========================================================
 # 11. KPI AND SUMMARY
 # =========================================================
-summary_df = build_group_summary(filtered_df)
+if view_mode == "Overall View":
+    uneven_threshold_percent = st.slider(
+        "Cross-Width Unevenness Threshold (%)",
+        min_value=1.0,
+        max_value=30.0,
+        value=10.0,
+        step=0.5,
+        help=(
+            "A coil is classified as uneven when "
+            "Cross-Width Range (%) exceeds this threshold."
+        ),
+    )
+else:
+    uneven_threshold_percent = 10.0
+
+summary_df = build_group_summary(
+    filtered_df,
+    uneven_threshold_percent,
+)
 
 coil_count = filtered_df[
     "產出鋼捲號碼"
@@ -1452,6 +1745,8 @@ if view_mode == "Overall View":
         "Overall Section",
         [
             "Target and Lower-Limit Difference",
+            "Stability Analysis",
+            "Three-Risk Analysis",
             "Quality Risk Rate",
             "Coil Count",
             "Summary Table",
@@ -1487,6 +1782,101 @@ if view_mode == "Overall View":
             )
             plt.close(fig)
 
+            st.divider()
+
+    elif overall_section == "Stability Analysis":
+        st.info(
+            "Lower Target Deviation Std and lower P10-P90 Range "
+            "indicate a more stable process. Groups with one coil "
+            "have a standard deviation of 0 and should be interpreted "
+            "together with Coil Count."
+        )
+
+        for coating_type in coating_types:
+            coating_summary = summary_df[
+                summary_df["鍍製別"].astype(str) == coating_type
+            ].copy()
+
+            st.subheader(f"Coating Type: {coating_type}")
+
+            fig = plot_stability_by_coating_type(
+                coating_summary,
+                coating_type,
+            )
+            st.pyplot(
+                fig,
+                use_container_width=True,
+            )
+            plt.close(fig)
+
+            stability_columns = [
+                "上鍍層",
+                "鍍層目標值",
+                "鍍層下限值",
+                "Coil_Count",
+                "Average_Target_Deviation",
+                "Median_Target_Deviation",
+                "Target_Deviation_Std",
+                "Target_Deviation_P10",
+                "Target_Deviation_P90",
+                "Target_Deviation_P10_P90_Range",
+                "Deviation_CV_vs_Target (%)",
+            ]
+
+            show_dataframe(
+                coating_summary[stability_columns],
+                height=min(
+                    420,
+                    80 + len(coating_summary) * 36,
+                ),
+            )
+            st.divider()
+
+    elif overall_section == "Three-Risk Analysis":
+        st.info(
+            "The three risk rates are non-exclusive: one coil may be "
+            "both below the Lower Limit and uneven. "
+            f"Unevenness threshold: {uneven_threshold_percent:.1f}%."
+        )
+
+        for coating_type in coating_types:
+            coating_summary = summary_df[
+                summary_df["鍍製別"].astype(str) == coating_type
+            ].copy()
+
+            st.subheader(f"Coating Type: {coating_type}")
+
+            fig = plot_three_risks_by_coating_type(
+                coating_summary,
+                coating_type,
+            )
+            st.pyplot(
+                fig,
+                use_container_width=True,
+            )
+            plt.close(fig)
+
+            risk_columns = [
+                "上鍍層",
+                "鍍層目標值",
+                "鍍層下限值",
+                "Coil_Count",
+                "Coils_With_Position_Below_Limit",
+                "Position Below Limit Rate (%)",
+                "Excess_Coating_Coils",
+                "Excess Coating Rate (%)",
+                "Uneven_Coating_Coils",
+                "Uneven Coating Rate (%)",
+                "Uneven Threshold (%)",
+            ]
+
+            show_dataframe(
+                coating_summary[risk_columns],
+                height=min(
+                    420,
+                    80 + len(coating_summary) * 36,
+                ),
+            )
             st.divider()
 
     elif overall_section == "Quality Risk Rate":
@@ -1547,8 +1937,18 @@ if view_mode == "Overall View":
             "Below Target Rate (%)",
             "Coils_At_Or_Above_Target",
             "At or Above Target Rate (%)",
+            "Target_Deviation_Std",
+            "Target_Deviation_P10",
+            "Target_Deviation_P90",
+            "Target_Deviation_P10_P90_Range",
+            "Deviation_CV_vs_Target (%)",
             "Average_Cross_Width_Range",
             "Average_Cross_Width_Range_Percent",
+            "Excess_Coating_Coils",
+            "Excess Coating Rate (%)",
+            "Uneven_Coating_Coils",
+            "Uneven Coating Rate (%)",
+            "Uneven Threshold (%)",
         ]
 
         show_dataframe(
