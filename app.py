@@ -233,10 +233,10 @@ def build_group_summary(
 ) -> pd.DataFrame:
     """Build one summary row per coating standard.
 
-    Cross-width variation is judged against the engineering allowance
-    (Target - Lower Limit), not against a fixed percent of thickness.
-    A coil is flagged only when its North/Center/South range consumes more
-    than the selected percentage of that allowance.
+    Cross-width variation compares the actual difference between the thickest
+    and thinnest positions with the allowable margin (Target - Lower Limit).
+    A coil is flagged only when the actual difference exceeds the selected
+    percentage of that allowable margin.
     """
     if df.empty:
         return pd.DataFrame()
@@ -635,7 +635,7 @@ def render_three_risk_guide() -> None:
         **How to read**
 
         - `Flagged / Total coils` shows the actual number of coils exceeding each risk rule.
-        - **Cross-Width Range vs Allowable Margin** compares `(Max − Min)` with `Target − Lower Limit`.
+        - **Cross-Width Variation Risk** checks whether the difference between the thickest and thinnest positions is greater than the allowed margin (`Target − Lower Limit`).
         - A coil is flagged only when that utilization exceeds the selected limit (default: 100%).
         - **Priority Score** is a weighted index, not a defective-coil rate.
         - Darker cells indicate a higher flagged-coil rate; small samples are reference only.
@@ -709,7 +709,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                     <h4>How to read</h4>
                     <ul>
                         <li>Each risk cell shows <strong>flagged coils / total coils</strong> and the corresponding rate.</li>
-                        <li><strong>Cross-Width Range vs Allowable Margin</strong> compares (Max − Min) with (Target − Lower Limit).</li>
+                        <li><strong>Cross-Width Variation Risk</strong> checks whether the difference between the thickest and thinnest positions is greater than the allowed margin (Target − Lower Limit).</li>
                         <li>A coil is flagged only when the selected margin-utilization limit is exceeded.</li>
                         <li><strong>Priority Score</strong> is a weighted index, not a defective-coil rate.</li>
                         <li>Darker cells indicate higher risk.</li>
@@ -858,7 +858,7 @@ if view_mode == "Overall View":
         )
     with risk_col2:
         cross_width_margin_limit_percent = st.slider(
-            "Cross-Width Allowable-Margin Utilization Limit (%)",
+            "Cross-Width Variation Limit (% of Allowable Margin)",
             25.0,
             200.0,
             100.0,
