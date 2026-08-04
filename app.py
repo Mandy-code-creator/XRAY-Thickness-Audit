@@ -541,22 +541,25 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     matrix = chart_df[risk_columns].to_numpy(dtype=float)
     row_count = len(chart_df)
 
-    # Muted blue palette: professional, easy on the eyes, and print-friendly.
+    # ---------------------------------------------------------
+    # BẢNG MÀU MỚI: Tương phản cao (Trắng xanh -> Xanh biển -> Xanh đen đậm)
+    # ---------------------------------------------------------
     risk_cmap = LinearSegmentedColormap.from_list(
-        "muted_risk_blue",
-        ["#F5F7F9", "#DCE7EE", "#B8CEDB", "#86AFC3", "#527F99", "#274F68"],
+        "crisp_risk_blue",
+        ["#F8FAFC", "#BAE6FD", "#0EA5E9", "#0284C7", "#082F49"],
     )
 
-    # Increase chart dimensions and row spacing so labels remain readable in Streamlit and HTML.
+    # Thêm dpi=150 (hoặc 200) để khử viền mờ, giúp viền ô và chữ cực kỳ sắc nét
     fig_height = max(6.2, row_count * 0.72 + 2.2)
-    fig, ax = plt.subplots(figsize=(14.6, fig_height))
+    fig, ax = plt.subplots(figsize=(14.6, fig_height), dpi=150)
 
     image = ax.imshow(matrix, cmap=risk_cmap, vmin=0, vmax=100, aspect="auto")
 
     ax.set_xticks(np.arange(len(column_labels)))
-    ax.set_xticklabels(column_labels, fontsize=11, fontweight="semibold", linespacing=1.15)
+    ax.set_xticklabels(column_labels, fontsize=11, fontweight="bold", linespacing=1.15)
     ax.set_yticks(np.arange(row_count))
-    ax.set_yticklabels(chart_df["Standard Label"], fontsize=10)
+    ax.set_yticklabels(chart_df["Standard Label"], fontsize=10, fontweight="500")
+    
     ax.set_title(
         f"{coating_type} — Coating Risk Heatmap",
         pad=22,
@@ -568,12 +571,14 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
         total = int(chart_df.loc[row_index, "Coil_Count"])
         for column_index in range(len(column_labels)):
             value = matrix[row_index, column_index]
-            text_color = "white" if value >= 68 else "#1F2933"
+            
+            # HẠ NGƯỠNG ĐỔI MÀU XUỐNG 45 VÀ DÙNG ĐEN/TRẮNG TUYỆT ĐỐI TẠO TƯƠNG PHẢN CAO NHẤT
+            text_color = "white" if value >= 45 else "#000000"
 
             if column_index < 3:
                 affected = int(chart_df.loc[row_index, count_columns[column_index]])
                 cell_text = f"{affected}/{total} coils\n{value:.1f}%"
-                fontweight = "semibold"
+                fontweight = "bold" # Đổi thành bold để chữ nổi hơn
             else:
                 cell_text = f"{value:.1f}%"
                 fontweight = "bold"
@@ -584,12 +589,11 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
                 cell_text,
                 ha="center",
                 va="center",
-                fontsize=10.2,
+                fontsize=10.5,
                 linespacing=1.25,
                 fontweight=fontweight,
                 color=text_color,
             )
-
     ax.set_xticks(np.arange(-0.5, len(column_labels), 1), minor=True)
     ax.set_yticks(np.arange(-0.5, row_count, 1), minor=True)
     ax.grid(which="minor", color="white", linestyle="-", linewidth=2.0)
