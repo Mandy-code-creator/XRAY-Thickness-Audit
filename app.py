@@ -231,13 +231,7 @@ def build_group_summary(
     medium_stability_threshold: float = 6.0,
     minimum_reliable_coils: int = 5,
 ) -> pd.DataFrame:
-    """Build one summary row per coating standard.
-
-    Cross-width variation compares the actual difference between the thickest
-    and thinnest positions with the allowable margin (Target - Lower Limit).
-    A coil is flagged only when the actual difference exceeds the selected
-    percentage of that allowable margin.
-    """
+    """Build one summary row per coating standard."""
     if df.empty:
         return pd.DataFrame()
 
@@ -269,7 +263,6 @@ def build_group_summary(
     ).astype(int)
 
     # Risk 3 — Cross-width variation relative to the allowable engineering margin.
-    # Allowable margin = Target - Lower Limit.
     working["Allowable Cross-Width Margin"] = (
         working["鍍層目標值"] - working["鍍層下限值"]
     )
@@ -340,8 +333,7 @@ def build_group_summary(
     summary["Cross-Width Margin Limit (%)"] = cross_width_margin_limit_percent
     summary["Over-Coating Threshold (%)"] = over_coating_threshold_percent
 
-    # Priority score: quality risk receives the highest weight, followed by
-    # cross-width process risk and significant over-coating cost risk.
+    # Priority score
     summary["Risk Priority Score"] = (
         summary["Position Below Limit Rate (%)"] * 0.50
         + summary["Cross-Width Variation Risk Rate (%)"] * 0.30
@@ -410,7 +402,7 @@ def show_dataframe(df: pd.DataFrame, height: int = 500) -> None:
 def fig_to_base64(fig) -> str:
     """Convert Matplotlib figure to base64 string for HTML export."""
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=120)
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 
@@ -549,7 +541,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
         ["#F8FAFC", "#BAE6FD", "#0EA5E9", "#0284C7", "#082F49"],
     )
 
-    # Thêm dpi=150 (hoặc 200) để khử viền mờ, giúp viền ô và chữ cực kỳ sắc nét
+    # Thêm dpi=150 để khử viền mờ, giúp viền ô và chữ cực kỳ sắc nét
     fig_height = max(6.2, row_count * 0.72 + 2.2)
     fig, ax = plt.subplots(figsize=(14.6, fig_height), dpi=150)
 
@@ -578,7 +570,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
             if column_index < 3:
                 affected = int(chart_df.loc[row_index, count_columns[column_index]])
                 cell_text = f"{affected}/{total} coils\n{value:.1f}%"
-                fontweight = "bold" # Đổi thành bold để chữ nổi hơn
+                fontweight = "bold"
             else:
                 cell_text = f"{value:.1f}%"
                 fontweight = "bold"
@@ -594,6 +586,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
                 fontweight=fontweight,
                 color=text_color,
             )
+            
     ax.set_xticks(np.arange(-0.5, len(column_labels), 1), minor=True)
     ax.set_yticks(np.arange(-0.5, row_count, 1), minor=True)
     ax.grid(which="minor", color="white", linestyle="-", linewidth=2.0)
@@ -780,31 +773,32 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             .risk-guide h4 {{ margin-top: 0; color: #1a4f76; }}
             .risk-guide ul {{ padding-left: 18px; margin-bottom: 0; }}
             img {{ max-width: 100%; height: auto; border: 1px solid #e0e0e0; border-radius: 4px; padding: 10px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
-            .table-wrap {{ width: 100%; overflow-x: auto; margin-bottom: 28px; }}
-            table.compact-summary {{ border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 9px; line-height: 1.18; }}
-            table.compact-summary th, table.compact-summary td {{ border: 1px solid #cfd8df; padding: 3px 4px; text-align: center; vertical-align: middle; word-break: normal; overflow-wrap: anywhere; }}
-            table.compact-summary th {{ background-color: #eaf1f6; font-weight: 700; color: #1f3545; }}
-            table.compact-summary tr:nth-child(even) {{ background-color: #f8fafc; }}
-            table.compact-summary th:nth-child(1), table.compact-summary td:nth-child(1) {{ width: 22%; text-align: left; }}
-            table.compact-summary th:nth-child(2), table.compact-summary td:nth-child(2) {{ width: 7%; }}
-            table.compact-summary th:nth-child(3), table.compact-summary td:nth-child(3),
-            table.compact-summary th:nth-child(4), table.compact-summary td:nth-child(4),
-            table.compact-summary th:nth-child(5), table.compact-summary td:nth-child(5) {{ width: 13%; }}
-            table.compact-summary th:nth-child(6), table.compact-summary td:nth-child(6) {{ width: 9%; }}
-            table.compact-summary th:nth-child(7), table.compact-summary td:nth-child(7),
-            table.compact-summary th:nth-child(8), table.compact-summary td:nth-child(8) {{ width: 11%; }}
+            
+            .table-wrap {{ width: 100%; overflow-x: auto; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-radius: 8px; background: #fff;}}
+            table.custom-table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
+            table.custom-table th, table.custom-table td {{ border: 1px solid #e2e8f0; padding: 10px 12px; text-align: center; vertical-align: middle; }}
+            table.custom-table th {{ background-color: #f8fafc; font-weight: bold; color: #334155; line-height: 1.4; }}
+            table.custom-table tr:nth-child(even) {{ background-color: #fcfcfc; }}
+            table.custom-table tr:hover {{ background-color: #f1f5f9; }}
+            table.custom-table td:first-child {{ text-align: left; }}
+            .badge {{ padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; display: inline-block; }}
+            .badge-critical {{ background-color: #fee2e2; color: #991b1b; }}
+            .badge-high {{ background-color: #ffedd5; color: #9a3412; }}
+            .badge-medium {{ background-color: #fef3c7; color: #92400e; }}
+            .badge-low {{ background-color: #f0fdf4; color: #166534; }}
+            .badge-ins {{ background-color: #f1f5f9; color: #475569; }}
             @page {{ size: A4 landscape; margin: 10mm; }}
             @media print {{
-                body {{ margin: 0; max-width: none; font-size: 10px; }}
+                body {{ margin: 0; max-width: none; font-size: 11px; }}
                 h1 {{ font-size: 18px; }}
                 h2 {{ font-size: 14px; margin-top: 18px; }}
                 h3 {{ font-size: 12px; margin-top: 14px; }}
                 .chart-container {{ margin-bottom: 15px; page-break-inside: avoid; }}
-                .chart-conclusion {{ font-size: 9.2px; padding: 6px 8px; margin-top: 6px; }}
-                .table-wrap {{ overflow: visible; page-break-inside: auto; }}
-                table.compact-summary {{ font-size: 7.6px; }}
-                table.compact-summary th, table.compact-summary td {{ padding: 2px 2px; }}
-                table.compact-summary tr {{ page-break-inside: avoid; }}
+                .chart-conclusion {{ font-size: 10px; padding: 6px 8px; margin-top: 6px; }}
+                .table-wrap {{ overflow: visible; page-break-inside: auto; box-shadow: none; border: 1px solid #e2e8f0; }}
+                table.custom-table {{ font-size: 10px; }}
+                table.custom-table th, table.custom-table td {{ padding: 6px 4px; }}
+                table.custom-table tr {{ page-break-inside: avoid; }}
                 img {{ box-shadow: none; padding: 4px; }}
             }}
             @media (max-width: 900px) {{ .risk-layout {{ display: block; }} .risk-guide {{ margin-top: 15px; }} }}
@@ -870,48 +864,71 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         """
         plt.close(fig_risk)
 
-        # Compact A4 summary: combine affected-coil count and rate in one cell.
-        compact_table = c_summary.copy().sort_values("Risk Priority Score", ascending=False)
-        compact_table["Under-Coating"] = compact_table.apply(
-            lambda row: f"{int(row['Coils_With_Position_Below_Limit'])}/{int(row['Coil_Count'])}<br>{row['Position Below Limit Rate (%)']:.1f}%",
+        # ---------------------------------------------------------
+        # TỐI ƯU HÓA BẢNG DỮ LIỆU (MANAGEMENT-READY TABLE)
+        # ---------------------------------------------------------
+        display_table = c_summary.copy().sort_values("Risk Priority Score", ascending=False)
+        
+        # 1. Gộp Tên quy cách và Target/Lower Limit
+        display_table["規格<br>(Standard)"] = display_table.apply(
+            lambda row: f"<span style='font-size:14px; font-weight:600; color:#0f172a;'>{row['上鍍層']}</span><br><span style='color:#64748b; font-size:11px;'>T {row['鍍層目標值']:g} / L {row['鍍層下限值']:g}</span>",
             axis=1,
         )
-        compact_table["Over-Coating"] = compact_table.apply(
-            lambda row: f"{int(row['Significant_Over_Coating_Coils'])}/{int(row['Coil_Count'])}<br>{row['Significant Over-Coating Rate (%)']:.1f}%",
+        
+        display_table["總捲數<br>(Total)"] = display_table["Coil_Count"].astype(int)
+        
+        # 2. Gộp Tỷ lệ rủi ro (%) chữ to, số cuộn nhỏ ở dưới
+        display_table["偏薄風險<br>(Under-Coating)"] = display_table.apply(
+            lambda row: f"<span style='font-size:13px; font-weight:bold; color:#e11d48;'>{row['Position Below Limit Rate (%)']:.1f}%</span><br><span style='color:#64748b; font-size:11px;'>{int(row['Coils_With_Position_Below_Limit'])} / {int(row['Coil_Count'])}</span>",
             axis=1,
         )
-        compact_table["Cross-Width"] = compact_table.apply(
-            lambda row: f"{int(row['Cross_Width_Variation_Coils'])}/{int(row['Coil_Count'])}<br>{row['Cross-Width Variation Risk Rate (%)']:.1f}%",
+        display_table["過厚風險<br>(Over-Coating)"] = display_table.apply(
+            lambda row: f"<span style='font-size:13px; font-weight:bold; color:#ea580c;'>{row['Significant Over-Coating Rate (%)']:.1f}%</span><br><span style='color:#64748b; font-size:11px;'>{int(row['Significant_Over_Coating_Coils'])} / {int(row['Coil_Count'])}</span>",
             axis=1,
         )
-        compact_table["Priority Score"] = compact_table["Risk Priority Score"].map(
-            lambda value: f"{value:.1f}%"
-        )
-
-        compact_table["Standard"] = compact_table.apply(
-            lambda row: f"{row['上鍍層']}<br>T {row['鍍層目標值']:g} / L {row['鍍層下限值']:g}",
+        display_table["橫向變異風險<br>(Cross-Width)"] = display_table.apply(
+            lambda row: f"<span style='font-size:13px; font-weight:bold; color:#0284c7;'>{row['Cross-Width Variation Risk Rate (%)']:.1f}%</span><br><span style='color:#64748b; font-size:11px;'>{int(row['Cross_Width_Variation_Coils'])} / {int(row['Coil_Count'])}</span>",
             axis=1,
         )
-        compact_table = compact_table[
-            [
-                "Standard", "Coil_Count", "Under-Coating", "Over-Coating",
-                "Cross-Width", "Priority Score", "Risk Priority", "Stability Grade",
-            ]
-        ].rename(
-            columns={
-                "Coil_Count": "Total",
-                "Risk Priority": "Priority",
-                "Stability Grade": "Stability",
+        
+        display_table["優先分數<br>(Priority Score)"] = display_table["Risk Priority Score"].map(lambda x: f"<b>{x:.1f}</b>")
+        
+        # 3. Tạo Badge màu cho mức độ rủi ro
+        def get_risk_badge(risk):
+            mapping = {
+                "Critical": "<span class='badge badge-critical'>Critical</span>",
+                "High": "<span class='badge badge-high'>High</span>",
+                "Medium": "<span class='badge badge-medium'>Medium</span>",
+                "Low": "<span class='badge badge-low'>Low</span>",
+                "Insufficient Data": "<span class='badge badge-ins'>Insufficient</span>",
             }
-        )
-
-        table_html = compact_table.to_html(
+            return mapping.get(risk, risk)
+            
+        display_table["風險等級<br>(Risk Level)"] = display_table["Risk Priority"].map(get_risk_badge)
+        
+        # Map lại ngôn ngữ cho cột Ổn định
+        stab_map = {
+            "High Stability": "高穩定",
+            "Medium Stability": "中等",
+            "Low Stability": "低穩定",
+            "Insufficient Data": "資料不足"
+        }
+        display_table["生產穩定度<br>(Stability)"] = display_table["Stability Grade"].map(lambda x: stab_map.get(x, x))
+        
+        final_cols = [
+            "規格<br>(Standard)", "總捲數<br>(Total)", "偏薄風險<br>(Under-Coating)", 
+            "過厚風險<br>(Over-Coating)", "橫向變異風險<br>(Cross-Width)", 
+            "優先分數<br>(Priority Score)", "風險等級<br>(Risk Level)", "生產穩定度<br>(Stability)"
+        ]
+        
+        table_html = display_table[final_cols].to_html(
             index=False,
             escape=False,
-            classes="compact-summary",
+            classes="custom-table",
             border=0,
         )
-        html += f"<h3>數據摘要 (Data Summary)</h3><div class='table-wrap'>{table_html}</div><hr>"
+        
+        html += f"<h3>📊 數據摘要 (Data Summary)</h3><div class='table-wrap'>{table_html}</div><hr>"
 
     html += "</body></html>"
     return html
