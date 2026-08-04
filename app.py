@@ -452,7 +452,7 @@ def finalize_chart(fig):
             bar.get_y() + bar.get_height() / 2,
             f"{value:.2f}{note}", 
             va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
-        ))
+        )
         
     # Mở rộng giới hạn trục X thêm 35% mỗi bên để chữ không bị tràn viền
     current_xlim = ax.get_xlim()
