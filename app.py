@@ -157,7 +157,7 @@ def calculate_derived_metrics(valid_df: pd.DataFrame) -> pd.DataFrame:
     })
     
     # -------------------------------------------------------------
-    # LOGIC ĐÃ ĐƯỢC CHỈNH SỬA: LỖI NG TÍNH THEO TRUNG BÌNH CUỘN
+    # CẬP NHẬT LOGIC: ĐÁNH GIÁ MỎNG (NG) DỰA TRÊN ĐỘ DÀY TRUNG BÌNH
     # -------------------------------------------------------------
     valid["Average Below Lower Limit"] = valid["Coil Average Thickness"] < valid["鍍層下限值"]
     valid["Average Below Target"] = valid["Coil Average Thickness"] < valid["鍍層目標值"]
@@ -240,9 +240,26 @@ def build_group_summary(
     if df.empty:
         return pd.DataFrame()
 
-    working = df.copy()
-    working["Below Lower Limit Flag"] = working["Average Below Lower Limit"].astype(int)
-    working["Below Target Flag"] = working["Average Below Target"].astype(int)
+    # Recalculate derived columns defensively so cached/older intermediate
+    # DataFrames cannot cause missing-column KeyErrors after code updates.
+    working = calculate_derived_metrics(df.copy())
+
+    if "Average Below Lower Limit" not in working.columns:
+        working["Average Below Lower Limit"] = (
+            working["Coil Average Thickness"] < working["鍍層下限值"]
+        )
+
+    if "Average Below Target" not in working.columns:
+        working["Average Below Target"] = (
+            working["Coil Average Thickness"] < working["鍍層目標值"]
+        )
+
+    working["Below Lower Limit Flag"] = (
+        working["Average Below Lower Limit"].fillna(False).astype(int)
+    )
+    working["Below Target Flag"] = (
+        working["Average Below Target"].fillna(False).astype(int)
+    )
     working["At or Above Target Flag"] = (
         working["Coil Average Thickness"] >= working["鍍層目標值"]
     ).astype(int)
@@ -1110,7 +1127,14 @@ if view_mode == "Detailed View":
 else:
     filtered_df = analysis_df.copy()
 
-filtered_df = filtered_df.sort_values(["線別", "鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼"]).reset_index(drop=True)
+filtered_df = filtered_df.sort_values(
+    ["線別", "鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼"]
+).reset_index(drop=True)
+
+# Recalculate all derived metrics after filtering.
+# This prevents KeyError when Streamlit cache returns an older DataFrame
+# created before new derived columns were added.
+filtered_df = calculate_derived_metrics(filtered_df)
 
 
 # =========================================================
@@ -1159,8 +1183,18 @@ summary_df = build_group_summary(
 )
 
 coil_count = filtered_df["產出鋼捲號碼"].nunique()
-below_limit_count = int(filtered_df["Average Below Lower Limit"].sum())
-below_target_count = int(filtered_df["Average Below Target"].sum())
+
+below_limit_series = filtered_df.get(
+    "Average Below Lower Limit",
+    filtered_df["Coil Average Thickness"] < filtered_df["鍍層下限值"],
+)
+below_target_series = filtered_df.get(
+    "Average Below Target",
+    filtered_df["Coil Average Thickness"] < filtered_df["鍍層目標值"],
+)
+
+below_limit_count = int(pd.Series(below_limit_series, index=filtered_df.index).fillna(False).sum())
+below_target_count = int(pd.Series(below_target_series, index=filtered_df.index).fillna(False).sum())
 average_target_deviation = filtered_df["Target Deviation"].mean()
 average_lower_margin = filtered_df["Lower Limit Margin"].mean()
 
