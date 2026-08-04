@@ -33,6 +33,7 @@ st.caption(
 # 2. CONSTANTS
 # =========================================================
 REQUIRED_COLUMNS = [
+    "線別",
     "鍍製別",
     "上鍍層",
     "訂單號碼",
@@ -48,6 +49,7 @@ REQUIRED_COLUMNS = [
 ]
 
 TEXT_COLUMNS = [
+    "線別",
     "鍍製別",
     "上鍍層",
     "訂單號碼",
@@ -178,7 +180,7 @@ def prepare_data(source_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     invalid_text = pd.DataFrame({
         column: data[column].isna() | data[column].astype("string").str.strip().eq("")
-        for column in ["鍍製別", "上鍍層", "產出鋼捲號碼"]
+        for column in ["線別", "鍍製別", "上鍍層", "產出鋼捲號碼"]
     })
     invalid_numeric = data[NUMERIC_COLUMNS].isna()
     target_invalid = data["鍍層目標值"].le(0)
@@ -193,7 +195,7 @@ def prepare_data(source_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         current = reasons.loc[mask]
         reasons.loc[mask] = np.where(current.ne(""), current + "; " + text, text)
 
-    for column in ["鍍製別", "上鍍層", "產出鋼捲號碼"]:
+    for column in ["線別", "鍍製別", "上鍍層", "產出鋼捲號碼"]:
         append_reason(invalid_text[column], f"Missing {column}")
     for column in NUMERIC_COLUMNS:
         append_reason(invalid_numeric[column], f"Invalid or missing {column}")
@@ -213,7 +215,7 @@ def prepare_data(source_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 def aggregate_to_one_row_per_coil(valid_df: pd.DataFrame) -> pd.DataFrame:
     if valid_df.empty:
         return valid_df.copy()
-    group_columns = ["鍍製別", "上鍍層", "鍍層目標值", "鍍層下限值", "訂單號碼", "產出鋼捲號碼"]
+    group_columns = ["線別", "鍍製別", "上鍍層", "鍍層目標值", "鍍層下限值", "訂單號碼", "產出鋼捲號碼"]
     aggregation = {
         "XRAY_A_T_N": "mean", "XRAY_A_T_C": "mean", "XRAY_A_T_S": "mean",
         "XRAY_A_B_N": "mean", "XRAY_A_B_C": "mean", "XRAY_A_B_S": "mean",
@@ -308,7 +310,7 @@ def build_group_summary(
     summary["Thickness_Std"] = summary["Thickness_Std"].fillna(0)
     summary["Target_Deviation_Std"] = summary["Target_Deviation_Std"].fillna(0)
     summary["Target_Deviation_P10_P90_Range"] = (
-        summary["Target_Deviation_P90"] - summary["Target_Deviation_P10"]
+        summary["Target_Deviation_P90"] - summary["Target_Deviation_P90"]
     )
     summary["Deviation_CV_vs_Target (%)"] = np.where(
         summary["鍍層目標值"] != 0,
@@ -423,17 +425,15 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
         + " | Lower " + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
     )
     y = np.arange(len(chart_df))
-    # 1. Thu nhỏ độ dày thanh bar xuống 0.28
     bar_height = 0.28 
-    # 2. Tăng hệ số chiều cao tổng thể từ 0.48 lên 0.75 để kéo giãn không gian
     fig_height = max(5.5, len(chart_df) * 0.75) 
     
     fig, ax = plt.subplots(figsize=(14, fig_height), dpi=150)
 
-    # 3. Tạo một khoảng hở (gap) giữa 2 thanh xanh và cam để tách biệt chữ
     gap = 0.08
     target_bars = ax.barh(y - (bar_height / 2 + gap / 2), chart_df["Average_Target_Deviation"], height=bar_height, label="Average Target Deviation")
     lower_bars = ax.barh(y + (bar_height / 2 + gap / 2), chart_df["Average_Lower_Limit_Margin"], height=bar_height, label="Average Lower-Limit Margin")
+
     ax.axvline(0, linewidth=1.2, color="#333333")
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=10)
@@ -783,6 +783,13 @@ def build_risk_chart_conclusion(coating_summary: pd.DataFrame) -> str:
 def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> str:
     """Generate an HTML report using the same chart functions displayed in the app."""
     total_coils = filtered_df["產出鋼捲號碼"].nunique()
+    
+    # Tự động lấy tên dây chuyền từ cột '線別'
+    if "線別" in filtered_df.columns and not filtered_df["線別"].dropna().empty:
+        line_names = sorted(filtered_df["線別"].dropna().astype(str).unique().tolist())
+        production_line = " / ".join(line_names)
+    else:
+        production_line = "未提供 (Unknown Line)"
 
     html = f"""
     <!DOCTYPE html>
@@ -848,7 +855,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
     <body>
         <h1>XRAY 鍍層厚度管理報告 (XRAY Coating Thickness Audit)</h1>
         <div class="scope">
-            <strong>產線 (Line):</strong> CGL (連續熱浸鍍鋅線) &nbsp;|&nbsp;
+            <strong>產線 (Line):</strong> {production_line} &nbsp;|&nbsp;
             <strong>報告時間 (Report Time):</strong> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} <br>
             <strong>資料層級 (Analysis Level):</strong> 一捲一筆 (One row per coil) &nbsp;|&nbsp;
             <strong>總捲數 (Total Output Coils):</strong> {total_coils:,}
@@ -1107,7 +1114,7 @@ if view_mode == "Detailed View":
 else:
     filtered_df = analysis_df.copy()
 
-filtered_df = filtered_df.sort_values(["鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼"]).reset_index(drop=True)
+filtered_df = filtered_df.sort_values(["線別", "鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼"]).reset_index(drop=True)
 
 
 # =========================================================
@@ -1238,7 +1245,7 @@ if "html_report" in st.session_state:
     st.sidebar.download_button(
         label="Download HTML Report",
         data=st.session_state["html_report"],
-        file_name="Management_Report_Boss.html",
+        file_name=f"Management_Report_Boss_{pd.Timestamp.now().strftime('%Y%m%d')}.html",
         mime="text/html",
         use_container_width=True,
         type="primary"
@@ -1247,7 +1254,7 @@ if "html_report" in st.session_state:
 st.sidebar.divider()
 st.sidebar.subheader("Data Exports")
 if st.sidebar.button("Prepare Excel Export", use_container_width=True):
-    detail_cols = ["鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼", "鍍層目標值", "鍍層下限值", "Coil Average Thickness", "Coil Status"]
+    detail_cols = ["線別", "鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼", "鍍層目標值", "鍍層下限值", "Coil Average Thickness", "Coil Status"]
     export_bytes = create_excel_export(filtered_df[detail_cols], summary_df, rejected_df)
     st.sidebar.download_button(
         label="Download Excel Data",
