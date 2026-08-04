@@ -157,7 +157,7 @@ def calculate_derived_metrics(valid_df: pd.DataFrame) -> pd.DataFrame:
     })
     
     # -------------------------------------------------------------
-    # LOGIC CẬP NHẬT: ĐÁNH GIÁ LỖI MỎNG THEO ĐỘ DÀY TRUNG BÌNH CUỘN
+    # CẬP NHẬT LOGIC: ĐÁNH GIÁ MỎNG (NG) DỰA TRÊN ĐỘ DÀY TRUNG BÌNH
     # -------------------------------------------------------------
     valid["Average Below Lower Limit"] = valid["Coil Average Thickness"] < valid["鍍層下限值"]
     valid["Average Below Target"] = valid["Coil Average Thickness"] < valid["鍍層目標值"]
@@ -240,9 +240,26 @@ def build_group_summary(
     if df.empty:
         return pd.DataFrame()
 
-    working = df.copy()
-    working["Below Lower Limit Flag"] = working["Average Below Lower Limit"].astype(int)
-    working["Below Target Flag"] = working["Average Below Target"].astype(int)
+    # Recalculate derived columns defensively so cached/older intermediate
+    # DataFrames cannot cause missing-column KeyErrors after code updates.
+    working = calculate_derived_metrics(df.copy())
+
+    if "Average Below Lower Limit" not in working.columns:
+        working["Average Below Lower Limit"] = (
+            working["Coil Average Thickness"] < working["鍍層下限值"]
+        )
+
+    if "Average Below Target" not in working.columns:
+        working["Average Below Target"] = (
+            working["Coil Average Thickness"] < working["鍍層目標值"]
+        )
+
+    working["Below Lower Limit Flag"] = (
+        working["Average Below Lower Limit"].fillna(False).astype(int)
+    )
+    working["Below Target Flag"] = (
+        working["Average Below Target"].fillna(False).astype(int)
+    )
     working["At or Above Target Flag"] = (
         working["Coil Average Thickness"] >= working["鍍層目標值"]
     ).astype(int)
