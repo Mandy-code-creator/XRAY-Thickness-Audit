@@ -444,7 +444,7 @@ def plot_stability_by_coating_type(coating_summary: pd.DataFrame, coating_type: 
 
 
 def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type: str):
-    """Ranked risk heatmap: one row per coating standard, no overlapping labels."""
+    """Ranked risk heatmap with affected-coil counts and rates in every risk cell."""
     chart_df = coating_summary.copy()
     if chart_df.empty:
         fig, ax = plt.subplots(figsize=(10, 3))
@@ -456,7 +456,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
         chart_df["上鍍層"].astype(str)
         + " | Target " + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
         + " | Lower " + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
-        + " | n=" + chart_df["Coil_Count"].fillna(0).astype(int).astype(str)
+        + " | Total coils=" + chart_df["Coil_Count"].fillna(0).astype(int).astype(str)
     )
 
     risk_columns = [
@@ -464,6 +464,12 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
         "Significant Over-Coating Rate (%)",
         "Uneven Coating Rate (%)",
         "Risk Priority Score",
+    ]
+    count_columns = [
+        "Coils_With_Position_Below_Limit",
+        "Significant_Over_Coating_Coils",
+        "Uneven_Coating_Coils",
+        None,
     ]
     column_labels = [
         "Under-Coating\nQuality Risk",
@@ -474,6 +480,9 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
 
     for column in risk_columns:
         chart_df[column] = pd.to_numeric(chart_df[column], errors="coerce").fillna(0).clip(0, 100)
+    for column in [c for c in count_columns if c is not None]:
+        chart_df[column] = pd.to_numeric(chart_df[column], errors="coerce").fillna(0).astype(int)
+    chart_df["Coil_Count"] = pd.to_numeric(chart_df["Coil_Count"], errors="coerce").fillna(0).astype(int)
 
     chart_df = chart_df.sort_values(
         ["Risk Priority Score", "Position Below Limit Rate (%)", "Uneven Coating Rate (%)"],
@@ -482,34 +491,43 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
 
     matrix = chart_df[risk_columns].to_numpy(dtype=float)
     row_count = len(chart_df)
-    fig_height = max(4.8, row_count * 0.46 + 1.8)
-    fig, ax = plt.subplots(figsize=(11.8, fig_height))
+    fig_height = max(5.2, row_count * 0.54 + 1.9)
+    fig, ax = plt.subplots(figsize=(12.4, fig_height))
 
     image = ax.imshow(matrix, cmap="YlOrRd", vmin=0, vmax=100, aspect="auto")
 
     ax.set_xticks(np.arange(len(column_labels)))
     ax.set_xticklabels(column_labels, fontsize=9)
     ax.set_yticks(np.arange(row_count))
-    ax.set_yticklabels(chart_df["Standard Label"], fontsize=8.5)
+    ax.set_yticklabels(chart_df["Standard Label"], fontsize=8.3)
     ax.set_title(f"{coating_type} — Coating Risk Heatmap", pad=18, fontweight="bold")
 
-    # Cell values remain readable because every value has its own fixed cell.
     for row_index in range(row_count):
+        total = int(chart_df.loc[row_index, "Coil_Count"])
         for column_index in range(len(column_labels)):
             value = matrix[row_index, column_index]
             text_color = "white" if value >= 60 else "black"
+
+            if column_index < 3:
+                affected = int(chart_df.loc[row_index, count_columns[column_index]])
+                cell_text = f"{affected}/{total} coils\n{value:.1f}%"
+                fontweight = "normal"
+            else:
+                cell_text = f"{value:.1f}%"
+                fontweight = "bold"
+
             ax.text(
                 column_index,
                 row_index,
-                f"{value:.1f}%",
+                cell_text,
                 ha="center",
                 va="center",
-                fontsize=8.2,
-                fontweight="bold" if column_index == 3 else "normal",
+                fontsize=7.9,
+                linespacing=1.2,
+                fontweight=fontweight,
                 color=text_color,
             )
 
-    # Clear cell boundaries make comparison easier in both Streamlit and HTML export.
     ax.set_xticks(np.arange(-0.5, len(column_labels), 1), minor=True)
     ax.set_yticks(np.arange(-0.5, row_count, 1), minor=True)
     ax.grid(which="minor", color="white", linestyle="-", linewidth=1.5)
@@ -519,22 +537,25 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     colorbar = fig.colorbar(image, ax=ax, pad=0.025, fraction=0.035)
     colorbar.set_label("Risk Rate / Priority Score (%)", fontsize=9)
 
-    ax.set_xlabel("Rows are ranked from highest to lowest priority.", labelpad=14, fontsize=9)
-    fig.subplots_adjust(left=0.34, right=0.92, top=0.86, bottom=0.10)
+    ax.set_xlabel(
+        "Risk cells show affected coils / total coils and risk rate; Priority Score is a weighted index.",
+        labelpad=14,
+        fontsize=9,
+    )
+    fig.subplots_adjust(left=0.36, right=0.92, top=0.86, bottom=0.11)
     return fig
-
 
 def render_three_risk_guide() -> None:
     st.markdown(
         """
         **How to read**
 
-        - Each row is one coating standard.
+        - `Affected / Total coils` shows the actual number of coils flagged for that risk.
+        - The percentage below it is the corresponding risk rate.
+        - **Priority Score** is a weighted index, not a defective-coil rate.
         - Darker cells indicate higher risk.
-        - **Under-Coating** is the main quality risk.
-        - **Over-Coating** indicates cost-saving potential.
-        - **Unevenness** indicates cross-width process imbalance.
-        - Rows are ranked by **Priority Score**; `n` is the coil count.
+        - Rows are ranked from highest to lowest Priority Score.
+        - Results with very small total coil counts should be treated as reference only.
         """
     )
 
@@ -604,10 +625,11 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                 <div class='risk-guide'>
                     <h4>How to read</h4>
                     <ul>
-                        <li>Each row represents one coating standard.</li>
+                        <li>Each risk cell shows <strong>affected coils / total coils</strong> and the corresponding rate.</li>
+                        <li><strong>Priority Score</strong> is a weighted index, not a defective-coil rate.</li>
                         <li>Darker cells indicate higher risk.</li>
                         <li>Rows are ranked by Priority Score from high to low.</li>
-                        <li><strong>n</strong> is the coil count; small samples are for reference only.</li>
+                        <li>Small total coil counts are for reference only.</li>
                     </ul>
                 </div>
             </div>
@@ -617,9 +639,10 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
 
         table_cols = [
             "上鍍層", "鍍層目標值", "鍍層下限值", "Coil_Count",
-            "Position Below Limit Rate (%)", "Significant Over-Coating Rate (%)",
-            "Uneven Coating Rate (%)", "Risk Priority Score", "Main Risk",
-            "Risk Priority", "Stability Grade",
+            "Coils_With_Position_Below_Limit", "Position Below Limit Rate (%)",
+            "Significant_Over_Coating_Coils", "Significant Over-Coating Rate (%)",
+            "Uneven_Coating_Coils", "Uneven Coating Rate (%)",
+            "Risk Priority Score", "Main Risk", "Risk Priority", "Stability Grade",
         ]
         table_html = c_summary[table_cols].sort_values("Risk Priority Score", ascending=False).to_html(
             index=False, float_format=lambda x: f"{x:.2f}"
