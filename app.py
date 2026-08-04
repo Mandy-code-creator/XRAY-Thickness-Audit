@@ -523,7 +523,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     column_labels = [
         "Under-Coating\nQuality Risk",
         "Over-Coating\nCost Risk",
-        "Cross-Width Range\nvs Allowable Margin",
+        "Cross-Width Variation Risk Rate",
         "Priority\nScore",
     ]
 
