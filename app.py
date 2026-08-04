@@ -926,6 +926,8 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                 h2 {{
                     font-size: 14px;
                     margin: 10px 0 6px;
+                    page-break-before: auto;
+                    break-before: auto;
                     page-break-after: avoid;
                     break-after: avoid-page;
                 }}
@@ -950,6 +952,14 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                     break-before: page;
                     page-break-inside: avoid;
                     break-inside: avoid-page;
+                }}
+
+                /* Do not force a page break before the first chart.
+                   Otherwise the report cover/scope can be pushed to a blank first page. */
+                body > .chart-container:first-of-type,
+                h2 + .chart-container {{
+                    page-break-before: auto !important;
+                    break-before: auto !important;
                 }}
 
                 .chart-container img,
