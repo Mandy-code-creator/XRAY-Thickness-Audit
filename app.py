@@ -523,7 +523,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     column_labels = [
         "Under-Coating\nQuality Risk",
         "Over-Coating\nCost Risk",
-        "Cross-Width Variation\nRisk Rate",
+        "Cross-Width Range\nvs Allowable Margin",
         "Priority\nScore",
     ]
 
@@ -670,10 +670,33 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             .risk-guide h4 {{ margin-top: 0; color: #1a4f76; }}
             .risk-guide ul {{ padding-left: 18px; margin-bottom: 0; }}
             img {{ max-width: 100%; height: auto; border: 1px solid #e0e0e0; border-radius: 4px; padding: 10px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
-            table {{ border-collapse: collapse; width: 100%; margin-bottom: 30px; font-size: 13px; }}
-            th, td {{ border: 1px solid #ddd; padding: 9px; text-align: right; }}
-            th {{ background-color: #f2f2f2; text-align: center; font-weight: bold; }}
-            tr:nth-child(even) {{ background-color: #f9f9f9; }}
+            .table-wrap {{ width: 100%; overflow-x: auto; margin-bottom: 28px; }}
+            table.compact-summary {{ border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 9.5px; line-height: 1.25; }}
+            table.compact-summary th, table.compact-summary td {{ border: 1px solid #cfd8df; padding: 4px 5px; text-align: center; vertical-align: middle; word-break: break-word; }}
+            table.compact-summary th {{ background-color: #eaf1f6; font-weight: 700; color: #1f3545; }}
+            table.compact-summary tr:nth-child(even) {{ background-color: #f8fafc; }}
+            table.compact-summary th:nth-child(1), table.compact-summary td:nth-child(1) {{ width: 12%; text-align: left; }}
+            table.compact-summary th:nth-child(2), table.compact-summary td:nth-child(2),
+            table.compact-summary th:nth-child(3), table.compact-summary td:nth-child(3) {{ width: 7%; }}
+            table.compact-summary th:nth-child(4), table.compact-summary td:nth-child(4) {{ width: 7%; }}
+            table.compact-summary th:nth-child(5), table.compact-summary td:nth-child(5),
+            table.compact-summary th:nth-child(6), table.compact-summary td:nth-child(6),
+            table.compact-summary th:nth-child(7), table.compact-summary td:nth-child(7) {{ width: 13%; }}
+            table.compact-summary th:nth-child(8), table.compact-summary td:nth-child(8) {{ width: 9%; }}
+            table.compact-summary th:nth-child(9), table.compact-summary td:nth-child(9),
+            table.compact-summary th:nth-child(10), table.compact-summary td:nth-child(10) {{ width: 9%; }}
+            @page {{ size: A4 landscape; margin: 10mm; }}
+            @media print {{
+                body {{ margin: 0; max-width: none; font-size: 10px; }}
+                h1 {{ font-size: 18px; }}
+                h2 {{ font-size: 14px; margin-top: 18px; }}
+                h3 {{ font-size: 12px; margin-top: 14px; }}
+                .chart-container {{ margin-bottom: 20px; page-break-inside: avoid; }}
+                .table-wrap {{ overflow: visible; page-break-inside: avoid; }}
+                table.compact-summary {{ font-size: 8.2px; }}
+                table.compact-summary th, table.compact-summary td {{ padding: 3px 3px; }}
+                img {{ box-shadow: none; padding: 4px; }}
+            }}
             @media (max-width: 900px) {{ .risk-layout {{ display: block; }} .risk-guide {{ margin-top: 15px; }} }}
         </style>
     </head>
@@ -722,18 +745,48 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         """
         plt.close(fig_risk)
 
-        table_cols = [
-            "上鍍層", "鍍層目標值", "鍍層下限值", "Coil_Count",
-            "Coils_With_Position_Below_Limit", "Position Below Limit Rate (%)",
-            "Significant_Over_Coating_Coils", "Significant Over-Coating Rate (%)",
-            "Cross_Width_Variation_Coils", "Cross-Width Variation Risk Rate (%)",
-            "Average_Allowable_Cross_Width_Margin", "Average_Cross_Width_Margin_Utilization",
-            "Risk Priority Score", "Main Risk", "Risk Priority", "Stability Grade",
-        ]
-        table_html = c_summary[table_cols].sort_values("Risk Priority Score", ascending=False).to_html(
-            index=False, float_format=lambda x: f"{x:.2f}"
+        # Compact A4 summary: combine affected-coil count and rate in one cell.
+        compact_table = c_summary.copy().sort_values("Risk Priority Score", ascending=False)
+        compact_table["Under-Coating"] = compact_table.apply(
+            lambda row: f"{int(row['Coils_With_Position_Below_Limit'])}/{int(row['Coil_Count'])}<br>{row['Position Below Limit Rate (%)']:.1f}%",
+            axis=1,
         )
-        html += f"<h3>數據摘要 (Data Summary)</h3>{table_html}<hr>"
+        compact_table["Over-Coating"] = compact_table.apply(
+            lambda row: f"{int(row['Significant_Over_Coating_Coils'])}/{int(row['Coil_Count'])}<br>{row['Significant Over-Coating Rate (%)']:.1f}%",
+            axis=1,
+        )
+        compact_table["Cross-Width"] = compact_table.apply(
+            lambda row: f"{int(row['Cross_Width_Variation_Coils'])}/{int(row['Coil_Count'])}<br>{row['Cross-Width Variation Risk Rate (%)']:.1f}%",
+            axis=1,
+        )
+        compact_table["Priority Score"] = compact_table["Risk Priority Score"].map(
+            lambda value: f"{value:.1f}%"
+        )
+
+        compact_table = compact_table[
+            [
+                "上鍍層", "鍍層目標值", "鍍層下限值", "Coil_Count",
+                "Under-Coating", "Over-Coating", "Cross-Width",
+                "Priority Score", "Risk Priority", "Stability Grade",
+            ]
+        ].rename(
+            columns={{
+                "上鍍層": "Upper Coating",
+                "鍍層目標值": "Target",
+                "鍍層下限值": "Lower",
+                "Coil_Count": "Total Coils",
+                "Risk Priority": "Priority",
+                "Stability Grade": "Stability",
+            }}
+        )
+
+        table_html = compact_table.to_html(
+            index=False,
+            escape=False,
+            classes="compact-summary",
+            border=0,
+        )
+        html += f"<h3>數據摘要 (Data Summary)</h3><div class='table-wrap'>{table_html}</div><hr>"
 
     html += "</body></html>"
     return html
