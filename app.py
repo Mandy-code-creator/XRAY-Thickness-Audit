@@ -424,29 +424,68 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
     y = np.arange(len(chart_df))
     bar_height = 0.36
     fig_height = max(4.8, len(chart_df) * 0.48)
-    fig, ax = plt.subplots(figsize=(12, fig_height))
+    
+    # Tăng figsize lên 14 để đủ không gian chứa dòng text dài
+    fig, ax = plt.subplots(figsize=(14, fig_height), dpi=150)
 
     target_bars = ax.barh(y - bar_height / 2, chart_df["Average_Target_Deviation"], height=bar_height, label="Average Target Deviation")
     lower_bars = ax.barh(y + bar_height / 2, chart_df["Average_Lower_Limit_Margin"], height=bar_height, label="Average Lower-Limit Margin")
 
-    ax.axvline(0, linewidth=1.2)
+    ax.axvline(0, linewidth=1.2, color="#333333")
     ax.set_yticks(y)
-    ax.set_yticklabels(labels)
-    ax.set_title(f"{coating_type} — Target and Lower-Limit Difference", pad=16)
+    ax.set_yticklabels(labels, fontsize=10)
+    ax.set_title(f"{coating_type} — Target and Lower-Limit Difference", pad=16, fontweight="bold")
     ax.set_xlabel("Thickness Difference")
     ax.grid(True, axis="x", alpha=0.3)
-    ax.legend()
+    ax.legend(loc="lower right")
 
     max_abs = max(chart_df["Average_Target_Deviation"].abs().max(), chart_df["Average_Lower_Limit_Margin"].abs().max(), 1)
-    offset = max_abs * 0.015
+    offset = max_abs * 0.02
 
-    for bars in [target_bars, lower_bars]:
-        for bar in bars:
-            value = bar.get_width()
-            ax.text(
-                value + offset if value >= 0 else value - offset, bar.get_y() + bar.get_height() / 2,
-                f"{value:.2f}", va="center", ha="left" if value >= 0 else "right", fontsize=8,
-            )
+    # Thêm text cho thanh Mục tiêu (Target Deviation)
+    for i, (bar, (_, row)) in enumerate(zip(target_bars, chart_df.iterrows())):
+        value = bar.get_width()
+        total = int(row["Coil_Count"])
+        below_target = int(row["Coils_Below_Target"])
+        above_target = total - below_target
+        
+        # Ghi chú: Dày hơn mục tiêu (≥目標) hoặc Mỏng hơn mục tiêu (<目標)
+        if value >= 0:
+            note = f" (≥目標: {above_target}/{total})"
+        else:
+            note = f" (<目標: {below_target}/{total})"
+            
+        ax.text(
+            value + offset if value >= 0 else value - offset, 
+            bar.get_y() + bar.get_height() / 2,
+            f"{value:.2f}{note}", 
+            va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
+        )
+
+    # Thêm text cho thanh Giới hạn dưới (Lower Limit Margin)
+    for i, (bar, (_, row)) in enumerate(zip(lower_bars, chart_df.iterrows())):
+        value = bar.get_width()
+        total = int(row["Coil_Count"])
+        below_limit = int(row["Coils_With_Position_Below_Limit"])
+        above_limit = total - below_limit
+        
+        # Ghi chú: An toàn (≥下限) hoặc Dưới giới hạn (<下限)
+        if value >= 0:
+            note = f" (≥下限: {above_limit}/{total})"
+        else:
+            note = f" (<下限: {below_limit}/{total})"
+            
+        ax.text(
+            value + offset if value >= 0 else value - offset, 
+            bar.get_y() + bar.get_height() / 2,
+            f"{value:.2f}{note}", 
+            va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
+        )
+        
+    # Mở rộng giới hạn trục X thêm 35% mỗi bên để chữ không bị tràn viền
+    current_xlim = ax.get_xlim()
+    ax.set_xlim(current_xlim[0] * 1.35, current_xlim[1] * 1.35)
+    
     return finalize_chart(fig)
 
 
@@ -458,7 +497,7 @@ def plot_stability_by_coating_type(coating_summary: pd.DataFrame, coating_type: 
         + " | Lower " + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
     )
     fig_height = max(5.0, len(chart_df) * 0.52)
-    fig, ax = plt.subplots(figsize=(12, fig_height))
+    fig, ax = plt.subplots(figsize=(12, fig_height), dpi=150)
     bars = ax.barh(chart_df["Standard Label"], chart_df["Relative Stability Variation (%)"])
 
     high_threshold = chart_df["Stability Threshold High (%)"].iloc[0]
@@ -533,15 +572,13 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     matrix = chart_df[risk_columns].to_numpy(dtype=float)
     row_count = len(chart_df)
 
-    # ---------------------------------------------------------
-    # BẢNG MÀU MỚI: Tương phản cao (Trắng xanh -> Xanh biển -> Xanh đen đậm)
-    # ---------------------------------------------------------
+    # BẢNG MÀU Tương phản cao
     risk_cmap = LinearSegmentedColormap.from_list(
         "crisp_risk_blue",
         ["#F8FAFC", "#BAE6FD", "#0EA5E9", "#0284C7", "#082F49"],
     )
 
-    # Thêm dpi=150 để khử viền mờ, giúp viền ô và chữ cực kỳ sắc nét
+    # Thêm dpi=150 để khử viền mờ
     fig_height = max(6.2, row_count * 0.72 + 2.2)
     fig, ax = plt.subplots(figsize=(14.6, fig_height), dpi=150)
 
@@ -564,7 +601,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
         for column_index in range(len(column_labels)):
             value = matrix[row_index, column_index]
             
-            # HẠ NGƯỠNG ĐỔI MÀU XUỐNG 45 VÀ DÙNG ĐEN/TRẮNG TUYỆT ĐỐI TẠO TƯƠNG PHẢN CAO NHẤT
+            # Đổi màu chữ tạo tương phản tuyệt đối
             text_color = "white" if value >= 45 else "#000000"
 
             if column_index < 3:
@@ -745,7 +782,6 @@ def build_risk_chart_conclusion(coating_summary: pd.DataFrame) -> str:
 
 
 # =========================================================
-# =========================================================
 # 6. HTML REPORT EXPORT (FOR MANAGEMENT)
 # =========================================================
 @st.cache_data(show_spinner=False)
@@ -818,8 +854,10 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
     <body>
         <h1>XRAY 鍍層厚度管理報告 (XRAY Coating Thickness Audit)</h1>
         <div class="scope">
-            <strong>Analysis Level:</strong> One row per coil &nbsp;|&nbsp;
-            <strong>Total Output Coils:</strong> {total_coils:,}
+            <strong>產線 (Line):</strong> CGL (連續熱浸鍍鋅線) &nbsp;|&nbsp;
+            <strong>報告時間 (Report Time):</strong> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} <br>
+            <strong>資料層級 (Analysis Level):</strong> 一捲一筆 (One row per coil) &nbsp;|&nbsp;
+            <strong>總捲數 (Total Output Coils):</strong> {total_coils:,}
         </div>
     """
 
@@ -922,7 +960,6 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         }
         display_table["生產穩定度<br>(Stability)"] = display_table["Stability Grade"].map(lambda x: stab_map.get(x, x))
         
-        # Hàm sinh tự động phân tích và đưa ra Action/Insight
         def generate_insight(row):
             if row["Risk Priority"] == "Insufficient Data":
                 return "<span style='color:#64748b; font-size:12px;'>樣本數不足，結果僅供參考。</span>"
