@@ -414,14 +414,40 @@ def finalize_chart(fig):
     fig.tight_layout()
     return fig
 
-# Thêm text cho thanh Mục tiêu (Target Deviation)
+
+def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_type: str):
+    chart_df = coating_summary.copy().sort_values("Average_Target_Deviation", ascending=True)
+    labels = (
+        chart_df["上鍍層"].astype(str)
+        + " | Target " + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
+        + " | Lower " + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
+    )
+    y = np.arange(len(chart_df))
+    bar_height = 0.36
+    fig_height = max(4.8, len(chart_df) * 0.48)
+    
+    fig, ax = plt.subplots(figsize=(14, fig_height), dpi=150)
+
+    target_bars = ax.barh(y - bar_height / 2, chart_df["Average_Target_Deviation"], height=bar_height, label="Average Target Deviation")
+    lower_bars = ax.barh(y + bar_height / 2, chart_df["Average_Lower_Limit_Margin"], height=bar_height, label="Average Lower-Limit Margin")
+
+    ax.axvline(0, linewidth=1.2, color="#333333")
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=10)
+    ax.set_title(f"{coating_type} — Target and Lower-Limit Difference", pad=16, fontweight="bold")
+    ax.set_xlabel("Thickness Difference")
+    ax.grid(True, axis="x", alpha=0.3)
+    ax.legend(loc="lower right")
+
+    max_abs = max(chart_df["Average_Target_Deviation"].abs().max(), chart_df["Average_Lower_Limit_Margin"].abs().max(), 1)
+    offset = max_abs * 0.02
+
     for i, (bar, (_, row)) in enumerate(zip(target_bars, chart_df.iterrows())):
         value = bar.get_width()
         total = int(row["Coil_Count"])
         below_target = int(row["Coils_Below_Target"])
         above_target = total - below_target
         
-        # SỬ DỤNG TIẾNG ANH ĐỂ TRÁNH LỖI FONT MATPLOTLIB
         if value >= 0:
             note = f" (≥ Target: {above_target}/{total})"
         else:
@@ -434,14 +460,12 @@ def finalize_chart(fig):
             va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
         )
 
-    # Thêm text cho thanh Giới hạn dưới (Lower Limit Margin)
     for i, (bar, (_, row)) in enumerate(zip(lower_bars, chart_df.iterrows())):
         value = bar.get_width()
         total = int(row["Coil_Count"])
         below_limit = int(row["Coils_With_Position_Below_Limit"])
         above_limit = total - below_limit
         
-        # SỬ DỤNG TIẾNG ANH ĐỂ TRÁNH LỖI FONT MATPLOTLIB
         if value >= 0:
             note = f" (≥ Lower: {above_limit}/{total})"
         else:
@@ -454,7 +478,6 @@ def finalize_chart(fig):
             va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
         )
         
-    # Mở rộng giới hạn trục X thêm 35% mỗi bên để chữ không bị tràn viền
     current_xlim = ax.get_xlim()
     ax.set_xlim(current_xlim[0] * 1.35, current_xlim[1] * 1.35)
     
@@ -544,13 +567,11 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     matrix = chart_df[risk_columns].to_numpy(dtype=float)
     row_count = len(chart_df)
 
-    # BẢNG MÀU Tương phản cao
     risk_cmap = LinearSegmentedColormap.from_list(
         "crisp_risk_blue",
         ["#F8FAFC", "#BAE6FD", "#0EA5E9", "#0284C7", "#082F49"],
     )
 
-    # Thêm dpi=150 để khử viền mờ
     fig_height = max(6.2, row_count * 0.72 + 2.2)
     fig, ax = plt.subplots(figsize=(14.6, fig_height), dpi=150)
 
@@ -573,7 +594,6 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
         for column_index in range(len(column_labels)):
             value = matrix[row_index, column_index]
             
-            # Đổi màu chữ tạo tương phản tuyệt đối
             text_color = "white" if value >= 45 else "#000000"
 
             if column_index < 3:
@@ -772,7 +792,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             h1 {{ color: #1a4f76; text-align: center; border-bottom: 2px solid #1a4f76; padding-bottom: 10px; }}
             h2 {{ color: #20639b; margin-top: 40px; border-left: 5px solid #20639b; padding-left: 10px; background-color: #f4f8fb; }}
             h3 {{ color: #333; margin-top: 30px; }}
-            .scope {{ background: #f7f9fb; border: 1px solid #dfe7ee; padding: 14px 18px; border-radius: 5px; margin-bottom: 30px; }}
+            .scope {{ background: #f7f9fb; border: 1px solid #dfe7ee; padding: 14px 18px; border-radius: 5px; margin-bottom: 30px; line-height: 1.8; }}
             .chart-container {{ margin-bottom: 32px; page-break-inside: avoid; }}
             .chart-conclusion {{ margin: 10px 0 4px; padding: 9px 12px; border-left: 4px solid #4f7b95; background: #f4f8fb; font-size: 12px; line-height: 1.45; text-align: left; }}
             .chart-conclusion strong {{ color: #1f4e68; }}
@@ -790,7 +810,6 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             table.custom-table tr:nth-child(even) {{ background-color: #fcfcfc; }}
             table.custom-table tr:hover {{ background-color: #f1f5f9; }}
             
-            /* Tinh chỉnh chiều rộng các cột để thêm cột Kết Luận */
             table.custom-table th:nth-child(1), table.custom-table td:nth-child(1) {{ width: 15%; text-align: left; }}
             table.custom-table th:nth-child(2), table.custom-table td:nth-child(2) {{ width: 5%; }}
             table.custom-table th:nth-child(3), table.custom-table td:nth-child(3),
@@ -885,9 +904,6 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         """
         plt.close(fig_risk)
 
-        # ---------------------------------------------------------
-        # TỐI ƯU HÓA BẢNG DỮ LIỆU & TẠO CỘT NHẬN XÉT (INSIGHTS)
-        # ---------------------------------------------------------
         display_table = c_summary.copy().sort_values("Risk Priority Score", ascending=False)
         
         display_table["規格<br>(Standard)"] = display_table.apply(
@@ -940,19 +956,16 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
 
             insights = []
             
-            # 1. Phân tích rủi ro mạ mỏng (Under-coating)
             under_rate = row['Position Below Limit Rate (%)']
             if under_rate >= 20:
                 insights.append("<span style='color:#e11d48; font-weight:bold;'>• 高度客訴風險</span>：偏薄比例過高，強烈建議調高目標值或排查設備。")
             elif under_rate > 0:
                 insights.append("<span style='color:#e11d48;'>• 具偏薄風險</span>：需微調目標值或注意風刀控制。")
 
-            # 2. Phân tích rủi ro đồng đều ngang (Cross-width)
             cross_rate = row['Cross-Width Variation Risk Rate (%)']
             if cross_rate >= 50:
                 insights.append("<span style='color:#0284c7; font-weight:bold;'>• 橫向均勻性差</span>：耗盡容許區間，需優先檢修風刀或氣壓設定。")
 
-            # 3. Phân tích rủi ro mạ dày gây lãng phí (Over-coating)
             over_rate = row['Significant Over-Coating Rate (%)']
             if over_rate >= 50 and under_rate < 10:
                 insights.append("<span style='color:#ea580c; font-weight:bold;'>• 嚴重過厚</span>：導致成本浪費，建議在穩定現況下調降目標值。")
