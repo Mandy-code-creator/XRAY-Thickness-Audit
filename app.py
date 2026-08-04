@@ -217,8 +217,13 @@ def aggregate_to_one_row_per_coil(valid_df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def build_group_summary(
-    df: pd.DataFrame, uneven_threshold_percent: float = 10.0, high_stability_threshold: float = 3.0,
-    medium_stability_threshold: float = 6.0, minimum_reliable_coils: int = 5,
+    df: pd.DataFrame,
+    uneven_threshold_percent: float = 5.0,
+    uneven_absolute_threshold: float = 5.0,
+    over_coating_threshold_percent: float = 3.0,
+    high_stability_threshold: float = 3.0,
+    medium_stability_threshold: float = 6.0,
+    minimum_reliable_coils: int = 5,
 ) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
@@ -227,8 +232,36 @@ def build_group_summary(
     working["Below Lower Limit Flag"] = working["Any Position Below Lower Limit"].astype(int)
     working["Below Target Flag"] = working["Average Below Target"].astype(int)
     working["At or Above Target Flag"] = (working["Coil Average Thickness"] >= working["鍍層目標值"]).astype(int)
-    working["Excess Coating Flag"] = (working["Coil Average Thickness"] > working["鍍層目標值"]).astype(int)
-    working["Uneven Coating Flag"] = (working["Cross-Width Range (%)"] > uneven_threshold_percent).astype(int)
+
+    # Risk 1 — Under-coating: any North / Center / South position below Lower Limit.
+    working["Under-Coating Severity (%)"] = np.where(
+        working["鍍層下限值"].ne(0),
+        np.maximum(working["鍍層下限值"] - working["Minimum Position Thickness"], 0)
+        / working["鍍層下限值"] * 100,
+        np.nan,
+    )
+
+    # Risk 2 — Significant over-coating: average thickness exceeds Target by a meaningful allowance.
+    working["Over-Coating Margin (%)"] = np.where(
+        working["鍍層目標值"].ne(0),
+        (working["Coil Average Thickness"] - working["鍍層目標值"])
+        / working["鍍層目標值"] * 100,
+        np.nan,
+    )
+    working["Significant Over-Coating Flag"] = (
+        working["Over-Coating Margin (%)"] > over_coating_threshold_percent
+    ).astype(int)
+
+    # Risk 3 — Cross-width unevenness: both relative and absolute differences must exceed limits.
+    working["Cross-Width Range vs Target (%)"] = np.where(
+        working["鍍層目標值"].ne(0),
+        working["Cross-Width Range"] / working["鍍層目標值"] * 100,
+        np.nan,
+    )
+    working["Uneven Coating Flag"] = (
+        (working["Cross-Width Range vs Target (%)"] > uneven_threshold_percent)
+        & (working["Cross-Width Range"] > uneven_absolute_threshold)
+    ).astype(int)
 
     group_columns = ["鍍製別", "上鍍層", "鍍層目標值", "鍍層下限值"]
 
@@ -248,7 +281,7 @@ def build_group_summary(
             Coils_With_Position_Below_Limit=("Below Lower Limit Flag", "sum"),
             Coils_Below_Target=("Below Target Flag", "sum"),
             Coils_At_Or_Above_Target=("At or Above Target Flag", "sum"),
-            Excess_Coating_Coils=("Excess Coating Flag", "sum"),
+            Significant_Over_Coating_Coils=("Significant Over-Coating Flag", "sum"),
             Uneven_Coating_Coils=("Uneven Coating Flag", "sum"),
             Average_Cross_Width_Range=("Cross-Width Range", "mean"),
             Average_Cross_Width_Range_Percent=("Cross-Width Range (%)", "mean"),
@@ -262,9 +295,37 @@ def build_group_summary(
     summary["Position Below Limit Rate (%)"] = summary["Coils_With_Position_Below_Limit"] / summary["Coil_Count"] * 100
     summary["Below Target Rate (%)"] = summary["Coils_Below_Target"] / summary["Coil_Count"] * 100
     summary["At or Above Target Rate (%)"] = summary["Coils_At_Or_Above_Target"] / summary["Coil_Count"] * 100
-    summary["Excess Coating Rate (%)"] = summary["Excess_Coating_Coils"] / summary["Coil_Count"] * 100
+    summary["Significant Over-Coating Rate (%)"] = summary["Significant_Over_Coating_Coils"] / summary["Coil_Count"] * 100
     summary["Uneven Coating Rate (%)"] = summary["Uneven_Coating_Coils"] / summary["Coil_Count"] * 100
-    summary["Uneven Threshold (%)"] = uneven_threshold_percent
+    summary["Uneven Relative Threshold (%)"] = uneven_threshold_percent
+    summary["Uneven Absolute Threshold"] = uneven_absolute_threshold
+    summary["Over-Coating Threshold (%)"] = over_coating_threshold_percent
+
+    # Priority score: quality risk receives the highest weight, followed by equipment stability and cost.
+    summary["Risk Priority Score"] = (
+        summary["Position Below Limit Rate (%)"] * 0.50
+        + summary["Uneven Coating Rate (%)"] * 0.30
+        + summary["Significant Over-Coating Rate (%)"] * 0.20
+    )
+
+    risk_columns = {
+        "Under-Coating": "Position Below Limit Rate (%)",
+        "Over-Coating": "Significant Over-Coating Rate (%)",
+        "Unevenness": "Uneven Coating Rate (%)",
+    }
+    summary["Main Risk"] = summary.apply(
+        lambda row: max(risk_columns, key=lambda name: row[risk_columns[name]]), axis=1
+    )
+    summary["Risk Priority"] = np.select(
+        [
+            summary["Coil_Count"] < minimum_reliable_coils,
+            summary["Risk Priority Score"] >= 50,
+            summary["Risk Priority Score"] >= 30,
+            summary["Risk Priority Score"] >= 15,
+        ],
+        ["Insufficient Data", "Critical", "High", "Medium"],
+        default="Low",
+    )
     summary["Relative Stability Variation (%)"] = np.where(summary["鍍層目標值"] != 0, summary["Target_Deviation_Std"] / summary["鍍層目標值"] * 100, np.nan)
     summary["Relative P10-P90 Range (%)"] = np.where(summary["鍍層目標值"] != 0, summary["Target_Deviation_P10_P90_Range"] / summary["鍍層目標值"] * 100, np.nan)
     
@@ -388,34 +449,76 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
         chart_df["上鍍層"].astype(str)
         + " | Target " + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
         + " | Lower " + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
+        + " | n=" + chart_df["Coil_Count"].astype(int).astype(str)
     )
-    chart_df = chart_df.sort_values("Position Below Limit Rate (%)", ascending=True)
+    chart_df = chart_df.sort_values("Risk Priority Score", ascending=True)
+
     y = np.arange(len(chart_df))
     bar_height = 0.24
-    fig_height = max(5.2, len(chart_df) * 0.58)
-    fig, ax = plt.subplots(figsize=(12, fig_height))
+    fig_height = max(5.4, len(chart_df) * 0.62)
+    fig, ax = plt.subplots(figsize=(12.5, fig_height))
 
-    below_bars = ax.barh(y - bar_height, chart_df["Position Below Limit Rate (%)"], height=bar_height, label="Below Lower Limit")
-    excess_bars = ax.barh(y, chart_df["Excess Coating Rate (%)"], height=bar_height, label="Excess Coating")
-    uneven_bars = ax.barh(y + bar_height, chart_df["Uneven Coating Rate (%)"], height=bar_height, label="Cross-Width Unevenness")
+    under_bars = ax.barh(
+        y - bar_height,
+        chart_df["Position Below Limit Rate (%)"],
+        height=bar_height,
+        label="Under-Coating Risk",
+    )
+    over_bars = ax.barh(
+        y,
+        chart_df["Significant Over-Coating Rate (%)"],
+        height=bar_height,
+        label="Significant Over-Coating Risk",
+    )
+    uneven_bars = ax.barh(
+        y + bar_height,
+        chart_df["Uneven Coating Rate (%)"],
+        height=bar_height,
+        label="Cross-Width Unevenness Risk",
+    )
 
     ax.set_yticks(y)
     ax.set_yticklabels(chart_df["Standard Label"])
-    ax.set_title(f"{coating_type} — Three-Risk Overview", pad=16)
+    ax.set_title(f"{coating_type} — Three-Risk Priority Overview", pad=16)
     ax.set_xlabel("Coil Risk Rate (%)")
     ax.grid(True, axis="x", alpha=0.3)
-    ax.legend()
+    ax.legend(loc="lower right")
 
-    max_rate = max(chart_df["Position Below Limit Rate (%)"].max(), chart_df["Excess Coating Rate (%)"].max(), chart_df["Uneven Coating Rate (%)"].max(), 1)
+    max_rate = max(
+        chart_df["Position Below Limit Rate (%)"].max(),
+        chart_df["Significant Over-Coating Rate (%)"].max(),
+        chart_df["Uneven Coating Rate (%)"].max(),
+        1,
+    )
     offset = max_rate * 0.010
 
-    for bars in [below_bars, excess_bars, uneven_bars]:
+    for bars in [under_bars, over_bars, uneven_bars]:
         for bar in bars:
             value = bar.get_width()
-            ax.text(value + offset, bar.get_y() + bar.get_height() / 2, f"{value:.1f}%", va="center", ha="left", fontsize=7.5)
-            
-    ax.set_xlim(0, max(100, max_rate * 1.14))
+            ax.text(
+                value + offset,
+                bar.get_y() + bar.get_height() / 2,
+                f"{value:.1f}%",
+                va="center",
+                ha="left",
+                fontsize=7.5,
+            )
+
+    ax.set_xlim(0, max(100, max_rate * 1.16))
     return finalize_chart(fig)
+
+
+def render_three_risk_guide() -> None:
+    st.markdown(
+        """
+        **How to read**
+
+        - **Under-Coating:** any position is below the Lower Limit. Highest quality priority.
+        - **Over-Coating:** coil average exceeds Target by the selected allowance. Cost-saving opportunity.
+        - **Unevenness:** cross-width difference exceeds both relative and absolute limits. Check process balance.
+        - Groups with fewer than the minimum coil count should be treated as reference only.
+        """
+    )
 
 
 # =========================================================
@@ -423,15 +526,8 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
 # =========================================================
 @st.cache_data(show_spinner=False)
 def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> str:
-    """Generates an HTML report in Traditional Chinese for Management."""
+    """Generate an HTML report using the same chart functions displayed in the app."""
     total_coils = filtered_df["產出鋼捲號碼"].nunique()
-    
-    if len(filtered_df) > 0:
-        below_limit_rate = (filtered_df["Any Position Below Lower Limit"].sum() / len(filtered_df)) * 100
-        excess_rate = ((filtered_df["Coil Average Thickness"] > filtered_df["鍍層目標值"]).sum() / len(filtered_df)) * 100
-    else:
-        below_limit_rate = 0.0
-        excess_rate = 0.0
 
     html = f"""
     <!DOCTYPE html>
@@ -440,39 +536,30 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         <meta charset="utf-8">
         <title>XRAY 鍍層厚度管理報告</title>
         <style>
-            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px auto; max-width: 1200px; color: #333; line-height: 1.6; }}
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px auto; max-width: 1280px; color: #333; line-height: 1.6; }}
             h1 {{ color: #1a4f76; text-align: center; border-bottom: 2px solid #1a4f76; padding-bottom: 10px; }}
             h2 {{ color: #20639b; margin-top: 40px; border-left: 5px solid #20639b; padding-left: 10px; background-color: #f4f8fb; }}
             h3 {{ color: #333; margin-top: 30px; }}
-            .summary-box {{ background: #fff8e1; border: 1px solid #ffe082; padding: 20px; border-radius: 5px; margin-bottom: 40px; }}
-            .summary-box h2 {{ margin-top: 0; background-color: transparent; border: none; padding: 0; color: #d84315; }}
-            .chart-container {{ margin-bottom: 50px; text-align: center; }}
+            .scope {{ background: #f7f9fb; border: 1px solid #dfe7ee; padding: 14px 18px; border-radius: 5px; margin-bottom: 30px; }}
+            .chart-container {{ margin-bottom: 50px; }}
+            .risk-layout {{ display: flex; gap: 22px; align-items: flex-start; }}
+            .risk-chart {{ flex: 1 1 78%; text-align: center; }}
+            .risk-guide {{ flex: 0 0 250px; border: 1px solid #d9e2ea; background: #f8fafc; border-radius: 6px; padding: 14px 16px; font-size: 13px; }}
+            .risk-guide h4 {{ margin-top: 0; color: #1a4f76; }}
+            .risk-guide ul {{ padding-left: 18px; margin-bottom: 0; }}
             img {{ max-width: 100%; height: auto; border: 1px solid #e0e0e0; border-radius: 4px; padding: 10px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
             table {{ border-collapse: collapse; width: 100%; margin-bottom: 30px; font-size: 13px; }}
-            th, td {{ border: 1px solid #ddd; padding: 10px; text-align: right; }}
-            th {{ background-color: #f2f2f2; text-align: center; font-weight: bold; color: #333; }}
+            th, td {{ border: 1px solid #ddd; padding: 9px; text-align: right; }}
+            th {{ background-color: #f2f2f2; text-align: center; font-weight: bold; }}
             tr:nth-child(even) {{ background-color: #f9f9f9; }}
-            .highlight-red {{ color: #d32f2f; font-weight: bold; }}
-            .highlight-green {{ color: #388e3c; font-weight: bold; }}
+            @media (max-width: 900px) {{ .risk-layout {{ display: block; }} .risk-guide {{ margin-top: 15px; }} }}
         </style>
     </head>
     <body>
         <h1>XRAY 鍍層厚度管理報告 (XRAY Coating Thickness Audit)</h1>
-        
-        <div class="summary-box">
-            <h2>管理層結論與建議 (Executive Summary)</h2>
-            <p>本報告基於 Coil-Level (鋼捲層級) 數據進行標準化分析。以下為本次數據之核心指標：</p>
-            <ul>
-                <li><strong>總產出鋼捲數 (Total Output Coils):</strong> {total_coils:,} 捲</li>
-                <li><strong>低於下限風險率 (Below Lower Limit Risk):</strong> <span class="highlight-red">{below_limit_rate:.1f}%</span></li>
-                <li><strong>過度鍍層率 (Excess Coating Rate):</strong> <span class="highlight-green">{excess_rate:.1f}%</span></li>
-            </ul>
-            <p><strong>💡 決策建議 (Action Items):</strong></p>
-            <ul>
-                <li><strong>針對「低於下限風險率」較高之規格：</strong>請優先排查系統的目標值 (Target) 設定是否合理，或產線設備是否存在異常，以避免大批量判定為 NG。</li>
-                <li><strong>針對「過度鍍層率」極高之規格：</strong>代表產線正過度消耗鋅液。在確保品質前提下，建議適度調降附著量目標，以節省生產成本 (Cost Down)。</li>
-                <li><strong>針對「橫向不均 (Cross-Width Unevenness)」警報：</strong>若特定規格此項數據偏高，請指示工程部檢查氣刀 (Air Knife) 兩側與中間之壓力是否平衡。</li>
-            </ul>
+        <div class="scope">
+            <strong>Analysis Level:</strong> One row per coil &nbsp;|&nbsp;
+            <strong>Total Output Coils:</strong> {total_coils:,}
         </div>
     """
 
@@ -482,24 +569,43 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         c_summary = summary_df[summary_df["鍍製別"].astype(str) == c_type].copy()
         html += f"<h2>鍍製別 (Coating Type): {c_type}</h2>"
 
-        # Chart 1
         fig_target = plot_target_limit_by_coating_type(c_summary, c_type)
-        html += f"<div class='chart-container'><h3>1. 目標與下限差異 (Target vs Lower Limit)</h3><img src='data:image/png;base64,{fig_to_base64(fig_target)}'></div>"
+        html += f"<div class='chart-container'><h3>1. 目標與下限差異 (Target and Lower-Limit Difference)</h3><img src='data:image/png;base64,{fig_to_base64(fig_target)}'></div>"
         plt.close(fig_target)
 
-        # Chart 2
         fig_stab = plot_stability_by_coating_type(c_summary, c_type)
         html += f"<div class='chart-container'><h3>2. 生產穩定度 (Stability Grade)</h3><img src='data:image/png;base64,{fig_to_base64(fig_stab)}'></div>"
         plt.close(fig_stab)
 
-        # Chart 3
         fig_risk = plot_three_risks_by_coating_type(c_summary, c_type)
-        html += f"<div class='chart-container'><h3>3. 三大風險指標 (Three-Risk Overview)</h3><img src='data:image/png;base64,{fig_to_base64(fig_risk)}'></div>"
+        html += f"""
+        <div class='chart-container'>
+            <h3>3. 三大風險優先分析 (Three-Risk Priority Overview)</h3>
+            <div class='risk-layout'>
+                <div class='risk-chart'><img src='data:image/png;base64,{fig_to_base64(fig_risk)}'></div>
+                <div class='risk-guide'>
+                    <h4>How to read</h4>
+                    <ul>
+                        <li><strong>Under-Coating:</strong> any position below Lower Limit; highest quality priority.</li>
+                        <li><strong>Over-Coating:</strong> average exceeds Target by the selected allowance; cost-saving opportunity.</li>
+                        <li><strong>Unevenness:</strong> cross-width difference exceeds both selected limits; check process balance.</li>
+                        <li>Small-sample groups are for reference only.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        """
         plt.close(fig_risk)
 
-        # Data Table
-        table_cols = ["上鍍層", "鍍層目標值", "鍍層下限值", "Coil_Count", "Position Below Limit Rate (%)", "Excess Coating Rate (%)", "Stability Grade"]
-        table_html = c_summary[table_cols].to_html(index=False, float_format=lambda x: f"{x:.2f}")
+        table_cols = [
+            "上鍍層", "鍍層目標值", "鍍層下限值", "Coil_Count",
+            "Position Below Limit Rate (%)", "Significant Over-Coating Rate (%)",
+            "Uneven Coating Rate (%)", "Risk Priority Score", "Main Risk",
+            "Risk Priority", "Stability Grade",
+        ]
+        table_html = c_summary[table_cols].sort_values("Risk Priority Score", ascending=False).to_html(
+            index=False, float_format=lambda x: f"{x:.2f}"
+        )
         html += f"<h3>數據摘要 (Data Summary)</h3>{table_html}<hr>"
 
     html += "</body></html>"
@@ -618,21 +724,44 @@ filtered_df = filtered_df.sort_values(["鍍製別", "上鍍層", "訂單號碼",
 # 12. KPI AND SUMMARY
 # =========================================================
 if view_mode == "Overall View":
-    threshold_col1, threshold_col2, threshold_col3 = st.columns(3)
-    with threshold_col1:
-        uneven_threshold_percent = st.slider("Cross-Width Unevenness Threshold (%)", 1.0, 30.0, 10.0, 0.5)
-    with threshold_col2:
+    risk_col1, risk_col2, risk_col3 = st.columns(3)
+    with risk_col1:
+        over_coating_threshold_percent = st.slider(
+            "Significant Over-Coating Allowance (%)", 0.5, 15.0, 3.0, 0.5
+        )
+    with risk_col2:
+        uneven_threshold_percent = st.slider(
+            "Cross-Width Relative Threshold (% of Target)", 1.0, 20.0, 5.0, 0.5
+        )
+    with risk_col3:
+        uneven_absolute_threshold = st.number_input(
+            "Cross-Width Absolute Threshold", 0.1, 100.0, 5.0, 0.5
+        )
+
+    stability_col1, stability_col2, stability_col3 = st.columns(3)
+    with stability_col1:
         high_stability_threshold = st.number_input("High Stability Limit (%)", 0.1, 20.0, 3.0, 0.5)
-    with threshold_col3:
+    with stability_col2:
         medium_stability_threshold = st.number_input("Medium Stability Limit (%)", 0.5, 30.0, 6.0, 0.5)
-    minimum_reliable_coils = st.number_input("Minimum Coil Count for Stability Judgment", 2, 100, 5, 1)
+    with stability_col3:
+        minimum_reliable_coils = st.number_input("Minimum Coil Count for Judgment", 2, 100, 5, 1)
 else:
-    uneven_threshold_percent = 10.0
+    over_coating_threshold_percent = 3.0
+    uneven_threshold_percent = 5.0
+    uneven_absolute_threshold = 5.0
     high_stability_threshold = 3.0
     medium_stability_threshold = 6.0
     minimum_reliable_coils = 5
 
-summary_df = build_group_summary(filtered_df, uneven_threshold_percent, high_stability_threshold, medium_stability_threshold, minimum_reliable_coils)
+summary_df = build_group_summary(
+    filtered_df,
+    uneven_threshold_percent=uneven_threshold_percent,
+    uneven_absolute_threshold=uneven_absolute_threshold,
+    over_coating_threshold_percent=over_coating_threshold_percent,
+    high_stability_threshold=high_stability_threshold,
+    medium_stability_threshold=medium_stability_threshold,
+    minimum_reliable_coils=minimum_reliable_coils,
+)
 
 coil_count = filtered_df["產出鋼捲號碼"].nunique()
 below_limit_count = int(filtered_df["Any Position Below Lower Limit"].sum())
@@ -682,9 +811,13 @@ if view_mode == "Overall View":
         for coating_type in coating_types:
             c_summary = summary_df[summary_df["鍍製別"].astype(str) == coating_type].copy()
             st.subheader(f"Coating Type: {coating_type}")
-            fig = plot_three_risks_by_coating_type(c_summary, coating_type)
-            st.pyplot(fig, use_container_width=True)
-            plt.close(fig)
+            chart_col, guide_col = st.columns([4.3, 1.2], vertical_alignment="top")
+            with chart_col:
+                fig = plot_three_risks_by_coating_type(c_summary, coating_type)
+                st.pyplot(fig, use_container_width=True)
+                plt.close(fig)
+            with guide_col:
+                render_three_risk_guide()
             st.divider()
 
 else:
@@ -702,7 +835,7 @@ else:
 # =========================================================
 st.sidebar.divider()
 st.sidebar.subheader("Management Reports")
-st.sidebar.info("Generate overarching HTML report for management review.")
+st.sidebar.info("The HTML report uses the same chart functions and current thresholds shown in the app.")
 
 if st.sidebar.button("Prepare HTML Report", use_container_width=True):
     with st.spinner("Rendering HTML Report..."):
