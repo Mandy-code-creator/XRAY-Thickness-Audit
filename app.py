@@ -423,14 +423,17 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
         + " | Lower " + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
     )
     y = np.arange(len(chart_df))
-    bar_height = 0.36
-    fig_height = max(4.8, len(chart_df) * 0.48)
+    # 1. Thu nhỏ độ dày thanh bar xuống 0.28
+    bar_height = 0.28 
+    # 2. Tăng hệ số chiều cao tổng thể từ 0.48 lên 0.75 để kéo giãn không gian
+    fig_height = max(5.5, len(chart_df) * 0.75) 
     
     fig, ax = plt.subplots(figsize=(14, fig_height), dpi=150)
 
-    target_bars = ax.barh(y - bar_height / 2, chart_df["Average_Target_Deviation"], height=bar_height, label="Average Target Deviation")
-    lower_bars = ax.barh(y + bar_height / 2, chart_df["Average_Lower_Limit_Margin"], height=bar_height, label="Average Lower-Limit Margin")
-
+    # 3. Tạo một khoảng hở (gap) giữa 2 thanh xanh và cam để tách biệt chữ
+    gap = 0.08
+    target_bars = ax.barh(y - (bar_height / 2 + gap / 2), chart_df["Average_Target_Deviation"], height=bar_height, label="Average Target Deviation")
+    lower_bars = ax.barh(y + (bar_height / 2 + gap / 2), chart_df["Average_Lower_Limit_Margin"], height=bar_height, label="Average Lower-Limit Margin")
     ax.axvline(0, linewidth=1.2, color="#333333")
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=10)
