@@ -924,8 +924,8 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                 }}
 
                 h2 {{
-                    font-size: 14px;
-                    margin: 10px 0 6px;
+                    font-size: 13px;
+                    margin: 6px 0 4px;
                     page-break-before: auto;
                     break-before: auto;
                     page-break-after: avoid;
@@ -933,8 +933,8 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                 }}
 
                 h3 {{
-                    font-size: 12px;
-                    margin: 0 0 5px;
+                    font-size: 11px;
+                    margin: 0 0 3px;
                     page-break-after: avoid;
                     break-after: avoid-page;
                 }}
@@ -946,6 +946,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
 
                 .chart-container {{
                     width: 100%;
+                    max-width: 100%;
                     margin: 0;
                     padding: 0;
                     page-break-before: always;
@@ -965,12 +966,12 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                 .chart-container img,
                 .risk-chart img {{
                     display: block;
-                    width: auto !important;
+                    width: 100% !important;
                     max-width: 100% !important;
                     height: auto !important;
-                    max-height: 165mm !important;
+                    max-height: 178mm !important;
                     margin: 0 auto;
-                    padding: 2px;
+                    padding: 1px;
                     box-sizing: border-box;
                     object-fit: contain;
                     box-shadow: none;
