@@ -825,6 +825,27 @@ def render_three_risk_guide() -> None:
 def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> str:
     """Generate an HTML report using the same chart functions displayed in the app."""
     total_coils = filtered_df["產出鋼捲號碼"].nunique()
+
+    # Calculate the analyzed production-date range inside this function.
+    production_date_series = filtered_df.get(
+        "生產日期",
+        pd.Series(index=filtered_df.index, dtype="datetime64[ns]"),
+    )
+    production_dates = pd.to_datetime(
+        production_date_series,
+        errors="coerce",
+    ).dropna()
+
+    if production_dates.empty:
+        analysis_period = "未提供 (Not Available)"
+    else:
+        analysis_start = production_dates.min().strftime("%Y-%m-%d")
+        analysis_end = production_dates.max().strftime("%Y-%m-%d")
+        analysis_period = (
+            analysis_start
+            if analysis_start == analysis_end
+            else f"{analysis_start} ~ {analysis_end}"
+        )
     
     if "線別" in filtered_df.columns and not filtered_df["線別"].dropna().empty:
         line_names = sorted(filtered_df["線別"].dropna().astype(str).unique().tolist())
