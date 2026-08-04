@@ -25,7 +25,7 @@ st.success(
 )
 st.caption(
     "Analyze coating thickness by Coating Type → Upper Coating "
-    "and compare each coil with Target and Lower Limit."
+    "and compare each coil with Target and Lower Limit (Based on Average Thickness)."
 )
 
 
@@ -156,12 +156,15 @@ def calculate_derived_metrics(valid_df: pd.DataFrame) -> pd.DataFrame:
         "South Thickness": "South",
     })
     
-    valid["Any Position Below Lower Limit"] = valid["Minimum Position Thickness"] < valid["鍍層下限值"]
+    # -------------------------------------------------------------
+    # CẬP NHẬT LOGIC: ĐÁNH GIÁ MỎNG (NG) DỰA TRÊN ĐỘ DÀY TRUNG BÌNH
+    # -------------------------------------------------------------
+    valid["Average Below Lower Limit"] = valid["Coil Average Thickness"] < valid["鍍層下限值"]
     valid["Average Below Target"] = valid["Coil Average Thickness"] < valid["鍍層目標值"]
     
     valid["Coil Status"] = np.select(
-        [valid["Any Position Below Lower Limit"], valid["Average Below Target"]],
-        ["Any Position Below Lower Limit", "Average Below Target"],
+        [valid["Average Below Lower Limit"], valid["Average Below Target"]],
+        ["Average Below Lower Limit", "Average Below Target"],
         default="Meets Requirement",
     )
     return valid
@@ -238,17 +241,17 @@ def build_group_summary(
         return pd.DataFrame()
 
     working = df.copy()
-    working["Below Lower Limit Flag"] = working["Any Position Below Lower Limit"].astype(int)
+    working["Below Lower Limit Flag"] = working["Average Below Lower Limit"].astype(int)
     working["Below Target Flag"] = working["Average Below Target"].astype(int)
     working["At or Above Target Flag"] = (
         working["Coil Average Thickness"] >= working["鍍層目標值"]
     ).astype(int)
 
-    # Risk 1 — Under-coating quality risk.
+    # Risk 1 — Under-coating quality risk (Updated to use Average Thickness)
     working["Under-Coating Severity (%)"] = np.where(
         working["鍍層下限值"].ne(0),
         np.maximum(
-            working["鍍層下限值"] - working["Minimum Position Thickness"], 0
+            working["鍍層下限值"] - working["Coil Average Thickness"], 0
         ) / working["鍍層下限值"] * 100,
         np.nan,
     )
@@ -294,7 +297,7 @@ def build_group_summary(
             Target_Deviation_P90=("Target Deviation", lambda x: x.quantile(0.90)),
             Average_Lower_Limit_Margin=("Lower Limit Margin", "mean"),
             Minimum_Lower_Limit_Margin=("Lower Limit Margin", "min"),
-            Coils_With_Position_Below_Limit=("Below Lower Limit Flag", "sum"),
+            Average_Below_Lower_Limit_Coils=("Below Lower Limit Flag", "sum"),
             Coils_Below_Target=("Below Target Flag", "sum"),
             Coils_At_Or_Above_Target=("At or Above Target Flag", "sum"),
             Significant_Over_Coating_Coils=("Significant Over-Coating Flag", "sum"),
@@ -310,15 +313,15 @@ def build_group_summary(
     summary["Thickness_Std"] = summary["Thickness_Std"].fillna(0)
     summary["Target_Deviation_Std"] = summary["Target_Deviation_Std"].fillna(0)
     summary["Target_Deviation_P10_P90_Range"] = (
-        summary["Target_Deviation_P90"] - summary["Target_Deviation_P90"]
+        summary["Target_Deviation_P90"] - summary["Target_Deviation_P10"]
     )
     summary["Deviation_CV_vs_Target (%)"] = np.where(
         summary["鍍層目標值"] != 0,
         summary["Target_Deviation_Std"] / summary["鍍層目標值"] * 100,
         np.nan,
     )
-    summary["Position Below Limit Rate (%)"] = (
-        summary["Coils_With_Position_Below_Limit"] / summary["Coil_Count"] * 100
+    summary["Average Below Limit Rate (%)"] = (
+        summary["Average_Below_Lower_Limit_Coils"] / summary["Coil_Count"] * 100
     )
     summary["Below Target Rate (%)"] = (
         summary["Coils_Below_Target"] / summary["Coil_Count"] * 100
@@ -337,13 +340,13 @@ def build_group_summary(
 
     # Priority score
     summary["Risk Priority Score"] = (
-        summary["Position Below Limit Rate (%)"] * 0.50
+        summary["Average Below Limit Rate (%)"] * 0.50
         + summary["Cross-Width Variation Risk Rate (%)"] * 0.30
         + summary["Significant Over-Coating Rate (%)"] * 0.20
     )
 
     risk_columns = {
-        "Under-Coating": "Position Below Limit Rate (%)",
+        "Under-Coating": "Average Below Limit Rate (%)",
         "Over-Coating": "Significant Over-Coating Rate (%)",
         "Cross-Width Variation": "Cross-Width Variation Risk Rate (%)",
     }
@@ -445,14 +448,12 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
     max_abs = max(chart_df["Average_Target_Deviation"].abs().max(), chart_df["Average_Lower_Limit_Margin"].abs().max(), 1)
     offset = max_abs * 0.02
 
-    # Thêm text minh bạch cho thanh Mục tiêu (Target Deviation)
     for i, (bar, (_, row)) in enumerate(zip(target_bars, chart_df.iterrows())):
         value = bar.get_width()
         total = int(row["Coil_Count"])
         below_target = int(row["Coils_Below_Target"])
         above_target = total - below_target
         
-        # Hiển thị đồng thời số Đạt và Không Đạt
         note = f" (≥ Target: {above_target}/{total} | < Target: {below_target})"
             
         ax.text(
@@ -462,14 +463,12 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
             va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
         )
 
-    # Thêm text minh bạch cho thanh Giới hạn dưới (Lower Limit Margin)
     for i, (bar, (_, row)) in enumerate(zip(lower_bars, chart_df.iterrows())):
         value = bar.get_width()
         total = int(row["Coil_Count"])
-        below_limit = int(row["Coils_With_Position_Below_Limit"])
+        below_limit = int(row["Average_Below_Lower_Limit_Coils"])
         above_limit = total - below_limit
         
-        # Hiển thị đồng thời số Đạt và Không Đạt
         note = f" (≥ Lower: {above_limit}/{total} | < Lower: {below_limit})"
             
         ax.text(
@@ -480,7 +479,6 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
         )
         
     current_xlim = ax.get_xlim()
-    # Nới rộng trục X thêm lên 45% để đảm bảo dòng nhãn dài không bị tràn viền
     ax.set_xlim(current_xlim[0] * 1.45, current_xlim[1] * 1.45)
     
     return finalize_chart(fig)
@@ -537,13 +535,13 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     )
 
     risk_columns = [
-        "Position Below Limit Rate (%)",
+        "Average Below Limit Rate (%)",
         "Significant Over-Coating Rate (%)",
         "Cross-Width Variation Risk Rate (%)",
         "Risk Priority Score",
     ]
     count_columns = [
-        "Coils_With_Position_Below_Limit",
+        "Average_Below_Lower_Limit_Coils",
         "Significant_Over_Coating_Coils",
         "Cross_Width_Variation_Coils",
         None,
@@ -562,7 +560,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     chart_df["Coil_Count"] = pd.to_numeric(chart_df["Coil_Count"], errors="coerce").fillna(0).astype(int)
 
     chart_df = chart_df.sort_values(
-        ["Risk Priority Score", "Position Below Limit Rate (%)", "Cross-Width Variation Risk Rate (%)"],
+        ["Risk Priority Score", "Average Below Limit Rate (%)", "Cross-Width Variation Risk Rate (%)"],
         ascending=[False, False, False],
     ).reset_index(drop=True)
 
@@ -738,8 +736,8 @@ def build_risk_chart_conclusion(coating_summary: pd.DataFrame) -> str:
     risk_map = {
         "Under-Coating": (
             "低於下限",
-            int(top["Coils_With_Position_Below_Limit"]),
-            top["Position Below Limit Rate (%)"],
+            int(top["Average_Below_Lower_Limit_Coils"]),
+            top["Average Below Limit Rate (%)"],
         ),
         "Over-Coating": (
             "鍍層偏高",
@@ -761,12 +759,12 @@ def build_risk_chart_conclusion(coating_summary: pd.DataFrame) -> str:
         f"{_fmt_standard(top)}優先分數最高（{top['Risk Priority Score']:.1f}%），主要風險為{risk_name}，共有{affected}/{total}捲（{rate:.1f}%）被標記。"
     ]
 
-    under_candidates = df[(df["Coil_Count"] >= df["Minimum Reliable Coils"]) & (df["Position Below Limit Rate (%)"] > 0)]
+    under_candidates = df[(df["Coil_Count"] >= df["Minimum Reliable Coils"]) & (df["Average Below Limit Rate (%)"] > 0)]
     if not under_candidates.empty:
-        under_top = under_candidates.loc[under_candidates["Position Below Limit Rate (%)"].idxmax()]
+        under_top = under_candidates.loc[under_candidates["Average Below Limit Rate (%)"].idxmax()]
         if under_top.name != top.name:
             parts.append(
-                f"低於下限比例最高者為{_fmt_standard(under_top)}：{int(under_top['Coils_With_Position_Below_Limit'])}/{int(under_top['Coil_Count'])}捲（{under_top['Position Below Limit Rate (%)']:.1f}%）。"
+                f"低於下限比例最高者為{_fmt_standard(under_top)}：{int(under_top['Average_Below_Lower_Limit_Coils'])}/{int(under_top['Coil_Count'])}捲（{under_top['Average Below Limit Rate (%)']:.1f}%）。"
             )
 
     insufficient_count = int((df["Risk Priority"] == "Insufficient Data").sum())
@@ -783,7 +781,6 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
     """Generate an HTML report using the same chart functions displayed in the app."""
     total_coils = filtered_df["產出鋼捲號碼"].nunique()
     
-    # Tự động lấy tên dây chuyền từ cột '線別'
     if "線別" in filtered_df.columns and not filtered_df["線別"].dropna().empty:
         line_names = sorted(filtered_df["線別"].dropna().astype(str).unique().tolist())
         production_line = " / ".join(line_names)
@@ -923,7 +920,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         display_table["總捲數<br>(Total)"] = display_table["Coil_Count"].astype(int)
         
         display_table["偏薄風險<br>(Under-Coating)"] = display_table.apply(
-            lambda row: f"<span style='font-size:13px; font-weight:bold; color:#e11d48;'>{row['Position Below Limit Rate (%)']:.1f}%</span><br><span style='color:#64748b; font-size:11px;'>{int(row['Coils_With_Position_Below_Limit'])} / {int(row['Coil_Count'])}</span>",
+            lambda row: f"<span style='font-size:13px; font-weight:bold; color:#e11d48;'>{row['Average Below Limit Rate (%)']:.1f}%</span><br><span style='color:#64748b; font-size:11px;'>{int(row['Average_Below_Lower_Limit_Coils'])} / {int(row['Coil_Count'])}</span>",
             axis=1,
         )
         display_table["過厚風險<br>(Over-Coating)"] = display_table.apply(
@@ -965,7 +962,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
 
             insights = []
             
-            under_rate = row['Position Below Limit Rate (%)']
+            under_rate = row['Average Below Limit Rate (%)']
             if under_rate >= 20:
                 insights.append("<span style='color:#e11d48; font-weight:bold;'>• 高度客訴風險</span>：偏薄比例過高，強烈建議調高目標值或排查設備。")
             elif under_rate > 0:
@@ -1162,14 +1159,14 @@ summary_df = build_group_summary(
 )
 
 coil_count = filtered_df["產出鋼捲號碼"].nunique()
-below_limit_count = int(filtered_df["Any Position Below Lower Limit"].sum())
+below_limit_count = int(filtered_df["Average Below Lower Limit"].sum())
 below_target_count = int(filtered_df["Average Below Target"].sum())
 average_target_deviation = filtered_df["Target Deviation"].mean()
 average_lower_margin = filtered_df["Lower Limit Margin"].mean()
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 kpi1.metric("Coil Count", f"{coil_count:,}")
-kpi2.metric("Any Position Below Limit", f"{below_limit_count:,}", f"{below_limit_count / len(filtered_df) * 100:.1f}%", delta_color="inverse")
+kpi2.metric("Average Below Limit", f"{below_limit_count:,}", f"{below_limit_count / len(filtered_df) * 100:.1f}%", delta_color="inverse")
 kpi3.metric("Average Below Target", f"{below_target_count:,}", f"{below_target_count / len(filtered_df) * 100:.1f}%", delta_color="inverse")
 kpi4.metric("Average Target Deviation", f"{average_target_deviation:.2f}")
 kpi5.metric("Average Lower-Limit Margin", f"{average_lower_margin:.2f}")
