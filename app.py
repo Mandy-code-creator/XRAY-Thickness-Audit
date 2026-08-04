@@ -444,7 +444,7 @@ def plot_stability_by_coating_type(coating_summary: pd.DataFrame, coating_type: 
 
 
 def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type: str):
-    """Risk matrix: X=under-coating, Y=over-coating, bubble size=coil count, color=unevenness."""
+    """Clean risk matrix with selective labels to prevent overlapping text."""
     chart_df = coating_summary.copy()
     chart_df["Standard Label"] = (
         chart_df["上鍍層"].astype(str)
@@ -452,43 +452,82 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
         + " | L" + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
     )
 
-    x = chart_df["Position Below Limit Rate (%)"].fillna(0)
-    y = chart_df["Significant Over-Coating Rate (%)"].fillna(0)
-    uneven = chart_df["Uneven Coating Rate (%)"].fillna(0)
-    coil_count = chart_df["Coil_Count"].fillna(1).clip(lower=1)
+    x_col = "Position Below Limit Rate (%)"
+    y_col = "Significant Over-Coating Rate (%)"
+    uneven_col = "Uneven Coating Rate (%)"
 
-    # Bubble size is scaled by coil count so groups with more evidence are visually stronger.
-    size_min, size_max = 90, 900
+    chart_df[x_col] = chart_df[x_col].fillna(0)
+    chart_df[y_col] = chart_df[y_col].fillna(0)
+    chart_df[uneven_col] = chart_df[uneven_col].fillna(0)
+    chart_df["Coil_Count"] = chart_df["Coil_Count"].fillna(1).clip(lower=1)
+
+    # Priority score is used only to decide which points deserve labels.
+    if "Risk Priority Score" not in chart_df.columns:
+        chart_df["Risk Priority Score"] = (
+            chart_df[x_col] * 0.50
+            + chart_df[uneven_col] * 0.30
+            + chart_df[y_col] * 0.20
+        )
+
+    x = chart_df[x_col]
+    y = chart_df[y_col]
+    uneven = chart_df[uneven_col]
+    coil_count = chart_df["Coil_Count"]
+
+    # Keep bubbles restrained. Large bubbles made the zero-risk cluster unreadable.
+    size_min, size_max = 55, 360
     if coil_count.max() == coil_count.min():
-        bubble_size = np.full(len(chart_df), 320.0)
+        bubble_size = np.full(len(chart_df), 170.0)
     else:
-        bubble_size = size_min + (coil_count - coil_count.min()) / (coil_count.max() - coil_count.min()) * (size_max - size_min)
+        bubble_size = size_min + np.sqrt(
+            (coil_count - coil_count.min()) / (coil_count.max() - coil_count.min())
+        ) * (size_max - size_min)
 
-    fig, ax = plt.subplots(figsize=(12.5, 8.0))
+    fig, ax = plt.subplots(figsize=(12.5, 7.5))
     scatter = ax.scatter(
         x,
         y,
         s=bubble_size,
         c=uneven,
         cmap="YlOrRd",
-        alpha=0.82,
+        alpha=0.78,
         edgecolors="black",
-        linewidths=0.8,
+        linewidths=0.7,
+        zorder=3,
     )
 
-    # Management reference lines. These divide the chart into four practical priority zones.
     under_reference = 20.0
     over_reference = 20.0
-    ax.axvline(under_reference, linestyle="--", linewidth=1.3, color="deepskyblue")
-    ax.axhline(over_reference, linestyle="--", linewidth=1.3, color="deepskyblue")
+    ax.axvline(under_reference, linestyle="--", linewidth=1.3, color="deepskyblue", zorder=2)
+    ax.axhline(over_reference, linestyle="--", linewidth=1.3, color="deepskyblue", zorder=2)
 
-    for idx, row in chart_df.iterrows():
+    # Label only genuinely important points. This avoids the dense text forest at (0, 0).
+    label_mask = (
+        (chart_df[x_col] >= under_reference)
+        | (chart_df[y_col] >= over_reference)
+    )
+    label_candidates = chart_df.loc[label_mask].copy()
+
+    # When many points are risky, keep the highest-priority labels only.
+    label_candidates = label_candidates.nlargest(8, "Risk Priority Score")
+
+    offsets = [
+        (7, 8), (7, -18), (-7, 9), (-7, -18),
+        (10, 16), (10, -26), (-10, 16), (-10, -26),
+    ]
+    for (offset_x, offset_y), (_, row) in zip(offsets, label_candidates.iterrows()):
+        horizontal_alignment = "left" if offset_x >= 0 else "right"
         ax.annotate(
             f"{row['Standard Label']}\nn={int(row['Coil_Count'])}",
-            (row["Position Below Limit Rate (%)"], row["Significant Over-Coating Rate (%)"]),
-            xytext=(6, 6),
+            (row[x_col], row[y_col]),
+            xytext=(offset_x, offset_y),
             textcoords="offset points",
             fontsize=7.5,
+            ha=horizontal_alignment,
+            va="center",
+            bbox=dict(boxstyle="round,pad=0.22", facecolor="white", alpha=0.82, edgecolor="none"),
+            arrowprops=dict(arrowstyle="-", linewidth=0.6, color="gray"),
+            zorder=4,
         )
 
     ax.set_title(f"{coating_type} — Coating Risk Matrix", pad=18)
@@ -496,7 +535,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     ax.set_ylabel("Significant Over-Coating Rate (%) → Cost Risk")
     ax.set_xlim(-3, 103)
     ax.set_ylim(-3, 103)
-    ax.grid(True, alpha=0.25)
+    ax.grid(True, alpha=0.22, zorder=1)
 
     ax.text(2, 98, "High cost risk", va="top", fontsize=9, fontweight="bold")
     ax.text(98, 98, "Critical: quality + cost", va="top", ha="right", fontsize=9, fontweight="bold")
@@ -506,21 +545,18 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     colorbar = fig.colorbar(scatter, ax=ax, pad=0.02)
     colorbar.set_label("Cross-Width Unevenness Risk Rate (%)")
 
-    # Bubble-size reference for coil count.
-    representative_counts = sorted(set([int(coil_count.min()), int(coil_count.median()), int(coil_count.max())]))
-    handles = []
-    labels = []
-    for count in representative_counts:
-        if coil_count.max() == coil_count.min():
-            marker_size = 320.0
-        else:
-            marker_size = size_min + (count - coil_count.min()) / (coil_count.max() - coil_count.min()) * (size_max - size_min)
-        handles.append(ax.scatter([], [], s=marker_size, facecolors="none", edgecolors="black"))
-        labels.append(f"n={count}")
-    ax.legend(handles, labels, title="Coil count", loc="lower left", frameon=True)
+    # Do not draw the bubble-size legend inside the matrix; it caused overlap at the lower-left corner.
+    ax.text(
+        0.01,
+        -0.14,
+        "Bubble size represents coil count. Only groups above a 20% quality or cost risk are labeled.",
+        transform=ax.transAxes,
+        fontsize=8,
+        va="top",
+    )
 
-    return finalize_chart(fig)
-
+    fig.subplots_adjust(bottom=0.18)
+    return fig
 
 def render_three_risk_guide() -> None:
     st.markdown(
@@ -531,6 +567,7 @@ def render_three_risk_guide() -> None:
         - Move **up**: higher significant over-coating cost risk.
         - Darker bubble: higher cross-width unevenness risk.
         - Larger bubble: more coils; results are more representative.
+        - Labels are shown only for groups above the 20% quality or cost reference line.
         """
     )
 
