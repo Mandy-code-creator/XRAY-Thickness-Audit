@@ -3,6 +3,7 @@ import io
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -491,27 +492,40 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
 
     matrix = chart_df[risk_columns].to_numpy(dtype=float)
     row_count = len(chart_df)
-    fig_height = max(5.2, row_count * 0.54 + 1.9)
-    fig, ax = plt.subplots(figsize=(12.4, fig_height))
 
-    image = ax.imshow(matrix, cmap="YlOrRd", vmin=0, vmax=100, aspect="auto")
+    # Muted blue palette: professional, easy on the eyes, and print-friendly.
+    risk_cmap = LinearSegmentedColormap.from_list(
+        "muted_risk_blue",
+        ["#F5F7F9", "#DCE7EE", "#B8CEDB", "#86AFC3", "#527F99", "#274F68"],
+    )
+
+    # Increase chart dimensions and row spacing so labels remain readable in Streamlit and HTML.
+    fig_height = max(6.2, row_count * 0.72 + 2.2)
+    fig, ax = plt.subplots(figsize=(14.6, fig_height))
+
+    image = ax.imshow(matrix, cmap=risk_cmap, vmin=0, vmax=100, aspect="auto")
 
     ax.set_xticks(np.arange(len(column_labels)))
-    ax.set_xticklabels(column_labels, fontsize=9)
+    ax.set_xticklabels(column_labels, fontsize=11, fontweight="semibold", linespacing=1.15)
     ax.set_yticks(np.arange(row_count))
-    ax.set_yticklabels(chart_df["Standard Label"], fontsize=8.3)
-    ax.set_title(f"{coating_type} — Coating Risk Heatmap", pad=18, fontweight="bold")
+    ax.set_yticklabels(chart_df["Standard Label"], fontsize=10)
+    ax.set_title(
+        f"{coating_type} — Coating Risk Heatmap",
+        pad=22,
+        fontsize=15,
+        fontweight="bold",
+    )
 
     for row_index in range(row_count):
         total = int(chart_df.loc[row_index, "Coil_Count"])
         for column_index in range(len(column_labels)):
             value = matrix[row_index, column_index]
-            text_color = "white" if value >= 60 else "black"
+            text_color = "white" if value >= 68 else "#1F2933"
 
             if column_index < 3:
                 affected = int(chart_df.loc[row_index, count_columns[column_index]])
                 cell_text = f"{affected}/{total} coils\n{value:.1f}%"
-                fontweight = "normal"
+                fontweight = "semibold"
             else:
                 cell_text = f"{value:.1f}%"
                 fontweight = "bold"
@@ -522,27 +536,45 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
                 cell_text,
                 ha="center",
                 va="center",
-                fontsize=7.9,
-                linespacing=1.2,
+                fontsize=10.2,
+                linespacing=1.25,
                 fontweight=fontweight,
                 color=text_color,
             )
 
     ax.set_xticks(np.arange(-0.5, len(column_labels), 1), minor=True)
     ax.set_yticks(np.arange(-0.5, row_count, 1), minor=True)
-    ax.grid(which="minor", color="white", linestyle="-", linewidth=1.5)
+    ax.grid(which="minor", color="white", linestyle="-", linewidth=2.0)
     ax.tick_params(which="minor", bottom=False, left=False)
-    ax.tick_params(axis="x", top=True, bottom=False, labeltop=True, labelbottom=False, pad=8)
+    ax.tick_params(
+        axis="x",
+        top=True,
+        bottom=False,
+        labeltop=True,
+        labelbottom=False,
+        pad=11,
+        length=0,
+    )
+    ax.tick_params(axis="y", pad=7, length=0)
+
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(1.0)
+        spine.set_color("#697985")
 
     colorbar = fig.colorbar(image, ax=ax, pad=0.025, fraction=0.035)
-    colorbar.set_label("Risk Rate / Priority Score (%)", fontsize=9)
+    colorbar.set_label("Risk Rate / Priority Score (%)", fontsize=10.5, labelpad=10)
+    colorbar.ax.tick_params(labelsize=9.5)
+    colorbar.outline.set_linewidth(0.8)
+    colorbar.outline.set_edgecolor("#697985")
 
     ax.set_xlabel(
-        "Risk cells show affected coils / total coils and risk rate; Priority Score is a weighted index.",
-        labelpad=14,
-        fontsize=9,
+        "Each risk cell shows affected coils / total coils and the corresponding rate. "
+        "Priority Score is a weighted index.",
+        labelpad=18,
+        fontsize=10.5,
     )
-    fig.subplots_adjust(left=0.36, right=0.92, top=0.86, bottom=0.11)
+    fig.subplots_adjust(left=0.34, right=0.93, top=0.84, bottom=0.12)
     return fig
 
 def render_three_risk_guide() -> None:
