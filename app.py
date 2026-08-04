@@ -445,16 +445,15 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
     max_abs = max(chart_df["Average_Target_Deviation"].abs().max(), chart_df["Average_Lower_Limit_Margin"].abs().max(), 1)
     offset = max_abs * 0.02
 
+    # Thêm text minh bạch cho thanh Mục tiêu (Target Deviation)
     for i, (bar, (_, row)) in enumerate(zip(target_bars, chart_df.iterrows())):
         value = bar.get_width()
         total = int(row["Coil_Count"])
         below_target = int(row["Coils_Below_Target"])
         above_target = total - below_target
         
-        if value >= 0:
-            note = f" (≥ Target: {above_target}/{total})"
-        else:
-            note = f" (< Target: {below_target}/{total})"
+        # Hiển thị đồng thời số Đạt và Không Đạt
+        note = f" (≥ Target: {above_target}/{total} | < Target: {below_target})"
             
         ax.text(
             value + offset if value >= 0 else value - offset, 
@@ -463,16 +462,15 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
             va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
         )
 
+    # Thêm text minh bạch cho thanh Giới hạn dưới (Lower Limit Margin)
     for i, (bar, (_, row)) in enumerate(zip(lower_bars, chart_df.iterrows())):
         value = bar.get_width()
         total = int(row["Coil_Count"])
         below_limit = int(row["Coils_With_Position_Below_Limit"])
         above_limit = total - below_limit
         
-        if value >= 0:
-            note = f" (≥ Lower: {above_limit}/{total})"
-        else:
-            note = f" (< Lower: {below_limit}/{total})"
+        # Hiển thị đồng thời số Đạt và Không Đạt
+        note = f" (≥ Lower: {above_limit}/{total} | < Lower: {below_limit})"
             
         ax.text(
             value + offset if value >= 0 else value - offset, 
@@ -482,7 +480,8 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
         )
         
     current_xlim = ax.get_xlim()
-    ax.set_xlim(current_xlim[0] * 1.35, current_xlim[1] * 1.35)
+    # Nới rộng trục X thêm lên 45% để đảm bảo dòng nhãn dài không bị tràn viền
+    ax.set_xlim(current_xlim[0] * 1.45, current_xlim[1] * 1.45)
     
     return finalize_chart(fig)
 
