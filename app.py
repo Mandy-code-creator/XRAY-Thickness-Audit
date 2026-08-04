@@ -745,6 +745,7 @@ def build_risk_chart_conclusion(coating_summary: pd.DataFrame) -> str:
 
 
 # =========================================================
+# =========================================================
 # 6. HTML REPORT EXPORT (FOR MANAGEMENT)
 # =========================================================
 @st.cache_data(show_spinner=False)
@@ -759,7 +760,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         <meta charset="utf-8">
         <title>XRAY 鍍層厚度管理報告</title>
         <style>
-            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px auto; max-width: 1280px; color: #333; line-height: 1.6; }}
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px auto; max-width: 1350px; color: #333; line-height: 1.6; }}
             h1 {{ color: #1a4f76; text-align: center; border-bottom: 2px solid #1a4f76; padding-bottom: 10px; }}
             h2 {{ color: #20639b; margin-top: 40px; border-left: 5px solid #20639b; padding-left: 10px; background-color: #f4f8fb; }}
             h3 {{ color: #333; margin-top: 30px; }}
@@ -775,12 +776,23 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             img {{ max-width: 100%; height: auto; border: 1px solid #e0e0e0; border-radius: 4px; padding: 10px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
             
             .table-wrap {{ width: 100%; overflow-x: auto; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-radius: 8px; background: #fff;}}
-            table.custom-table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
-            table.custom-table th, table.custom-table td {{ border: 1px solid #e2e8f0; padding: 10px 12px; text-align: center; vertical-align: middle; }}
+            table.custom-table {{ border-collapse: collapse; width: 100%; font-size: 13px; table-layout: fixed; }}
+            table.custom-table th, table.custom-table td {{ border: 1px solid #e2e8f0; padding: 10px 8px; text-align: center; vertical-align: middle; word-wrap: break-word; }}
             table.custom-table th {{ background-color: #f8fafc; font-weight: bold; color: #334155; line-height: 1.4; }}
             table.custom-table tr:nth-child(even) {{ background-color: #fcfcfc; }}
             table.custom-table tr:hover {{ background-color: #f1f5f9; }}
-            table.custom-table td:first-child {{ text-align: left; }}
+            
+            /* Tinh chỉnh chiều rộng các cột để thêm cột Kết Luận */
+            table.custom-table th:nth-child(1), table.custom-table td:nth-child(1) {{ width: 15%; text-align: left; }}
+            table.custom-table th:nth-child(2), table.custom-table td:nth-child(2) {{ width: 5%; }}
+            table.custom-table th:nth-child(3), table.custom-table td:nth-child(3),
+            table.custom-table th:nth-child(4), table.custom-table td:nth-child(4),
+            table.custom-table th:nth-child(5), table.custom-table td:nth-child(5) {{ width: 9%; }}
+            table.custom-table th:nth-child(6), table.custom-table td:nth-child(6) {{ width: 7%; }}
+            table.custom-table th:nth-child(7), table.custom-table td:nth-child(7),
+            table.custom-table th:nth-child(8), table.custom-table td:nth-child(8) {{ width: 8%; }}
+            table.custom-table th:nth-child(9), table.custom-table td:nth-child(9) {{ width: 30%; text-align: left; }}
+            
             .badge {{ padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; display: inline-block; }}
             .badge-critical {{ background-color: #fee2e2; color: #991b1b; }}
             .badge-high {{ background-color: #ffedd5; color: #9a3412; }}
@@ -796,12 +808,11 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                 .chart-container {{ margin-bottom: 15px; page-break-inside: avoid; }}
                 .chart-conclusion {{ font-size: 10px; padding: 6px 8px; margin-top: 6px; }}
                 .table-wrap {{ overflow: visible; page-break-inside: auto; box-shadow: none; border: 1px solid #e2e8f0; }}
-                table.custom-table {{ font-size: 10px; }}
-                table.custom-table th, table.custom-table td {{ padding: 6px 4px; }}
+                table.custom-table {{ font-size: 9.5px; }}
+                table.custom-table th, table.custom-table td {{ padding: 4px 3px; }}
                 table.custom-table tr {{ page-break-inside: avoid; }}
                 img {{ box-shadow: none; padding: 4px; }}
             }}
-            @media (max-width: 900px) {{ .risk-layout {{ display: block; }} .risk-guide {{ margin-top: 15px; }} }}
         </style>
     </head>
     <body>
@@ -865,19 +876,17 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         plt.close(fig_risk)
 
         # ---------------------------------------------------------
-        # TỐI ƯU HÓA BẢNG DỮ LIỆU (MANAGEMENT-READY TABLE)
+        # TỐI ƯU HÓA BẢNG DỮ LIỆU & TẠO CỘT NHẬN XÉT (INSIGHTS)
         # ---------------------------------------------------------
         display_table = c_summary.copy().sort_values("Risk Priority Score", ascending=False)
         
-        # 1. Gộp Tên quy cách và Target/Lower Limit
         display_table["規格<br>(Standard)"] = display_table.apply(
-            lambda row: f"<span style='font-size:14px; font-weight:600; color:#0f172a;'>{row['上鍍層']}</span><br><span style='color:#64748b; font-size:11px;'>T {row['鍍層目標值']:g} / L {row['鍍層下限值']:g}</span>",
+            lambda row: f"<span style='font-size:13px; font-weight:600; color:#0f172a;'>{row['上鍍層']}</span><br><span style='color:#64748b; font-size:10px;'>T {row['鍍層目標值']:g} / L {row['鍍層下限值']:g}</span>",
             axis=1,
         )
         
         display_table["總捲數<br>(Total)"] = display_table["Coil_Count"].astype(int)
         
-        # 2. Gộp Tỷ lệ rủi ro (%) chữ to, số cuộn nhỏ ở dưới
         display_table["偏薄風險<br>(Under-Coating)"] = display_table.apply(
             lambda row: f"<span style='font-size:13px; font-weight:bold; color:#e11d48;'>{row['Position Below Limit Rate (%)']:.1f}%</span><br><span style='color:#64748b; font-size:11px;'>{int(row['Coils_With_Position_Below_Limit'])} / {int(row['Coil_Count'])}</span>",
             axis=1,
@@ -893,7 +902,6 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         
         display_table["優先分數<br>(Priority Score)"] = display_table["Risk Priority Score"].map(lambda x: f"<b>{x:.1f}</b>")
         
-        # 3. Tạo Badge màu cho mức độ rủi ro
         def get_risk_badge(risk):
             mapping = {
                 "Critical": "<span class='badge badge-critical'>Critical</span>",
@@ -906,7 +914,6 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             
         display_table["風險等級<br>(Risk Level)"] = display_table["Risk Priority"].map(get_risk_badge)
         
-        # Map lại ngôn ngữ cho cột Ổn định
         stab_map = {
             "High Stability": "高穩定",
             "Medium Stability": "中等",
@@ -915,10 +922,46 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         }
         display_table["生產穩定度<br>(Stability)"] = display_table["Stability Grade"].map(lambda x: stab_map.get(x, x))
         
+        # Hàm sinh tự động phân tích và đưa ra Action/Insight
+        def generate_insight(row):
+            if row["Risk Priority"] == "Insufficient Data":
+                return "<span style='color:#64748b; font-size:12px;'>樣本數不足，結果僅供參考。</span>"
+            if row["Risk Priority"] == "Low":
+                return "<span style='color:#166534; font-size:12px; font-weight:bold;'>✓ 各項指標良好，請維持現行設定。</span>"
+
+            insights = []
+            
+            # 1. Phân tích rủi ro mạ mỏng (Under-coating)
+            under_rate = row['Position Below Limit Rate (%)']
+            if under_rate >= 20:
+                insights.append("<span style='color:#e11d48; font-weight:bold;'>• 高度客訴風險</span>：偏薄比例過高，強烈建議調高目標值或排查設備。")
+            elif under_rate > 0:
+                insights.append("<span style='color:#e11d48;'>• 具偏薄風險</span>：需微調目標值或注意風刀控制。")
+
+            # 2. Phân tích rủi ro đồng đều ngang (Cross-width)
+            cross_rate = row['Cross-Width Variation Risk Rate (%)']
+            if cross_rate >= 50:
+                insights.append("<span style='color:#0284c7; font-weight:bold;'>• 橫向均勻性差</span>：耗盡容許區間，需優先檢修風刀或氣壓設定。")
+
+            # 3. Phân tích rủi ro mạ dày gây lãng phí (Over-coating)
+            over_rate = row['Significant Over-Coating Rate (%)']
+            if over_rate >= 50 and under_rate < 10:
+                insights.append("<span style='color:#ea580c; font-weight:bold;'>• 嚴重過厚</span>：導致成本浪費，建議在穩定現況下調降目標值。")
+            elif over_rate >= 20 and under_rate == 0:
+                insights.append("<span style='color:#ea580c;'>• 具過厚情形</span>：完全無偏薄風險，有節省鋅耗之空間。")
+
+            if not insights:
+                return "<span style='color:#475569; font-size:12px;'>需持續關注異常波動。</span>"
+
+            return f"<div style='font-size:12px; line-height:1.5;'>{'<br>'.join(insights)}</div>"
+
+        display_table["處置建議<br>(Action / Insight)"] = display_table.apply(generate_insight, axis=1)
+
         final_cols = [
             "規格<br>(Standard)", "總捲數<br>(Total)", "偏薄風險<br>(Under-Coating)", 
             "過厚風險<br>(Over-Coating)", "橫向變異風險<br>(Cross-Width)", 
-            "優先分數<br>(Priority Score)", "風險等級<br>(Risk Level)", "生產穩定度<br>(Stability)"
+            "優先分數<br>(Priority Score)", "風險等級<br>(Risk Level)", 
+            "生產穩定度<br>(Stability)", "處置建議<br>(Action / Insight)"
         ]
         
         table_html = display_table[final_cols].to_html(
