@@ -33,6 +33,7 @@ st.caption(
 # 2. CONSTANTS
 # =========================================================
 REQUIRED_COLUMNS = [
+    "生產日期",
     "線別",
     "鍍製別",
     "上鍍層",
@@ -66,6 +67,9 @@ NUMERIC_COLUMNS = [
     "XRAY_A_B_C",
     "XRAY_A_B_S",
 ]
+
+
+DATE_COLUMNS = ["生產日期"]
 
 
 # =========================================================
@@ -170,11 +174,36 @@ def calculate_derived_metrics(valid_df: pd.DataFrame) -> pd.DataFrame:
     return valid
 
 
+def parse_production_date(series: pd.Series) -> pd.Series:
+    """Parse production dates from normal date strings or Excel serial dates."""
+    raw = series.copy()
+
+    # First try ordinary date parsing.
+    parsed = pd.to_datetime(raw, errors="coerce")
+
+    # For values still not parsed, try Excel serial-date conversion.
+    numeric = pd.to_numeric(raw, errors="coerce")
+    excel_mask = parsed.isna() & numeric.notna()
+    if excel_mask.any():
+        parsed.loc[excel_mask] = pd.to_datetime(
+            numeric.loc[excel_mask],
+            unit="D",
+            origin="1899-12-30",
+            errors="coerce",
+        )
+
+    return parsed
+
+
 @st.cache_data(show_spinner=False)
 def prepare_data(source_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     data = normalize_columns(source_df)
     for column in TEXT_COLUMNS:
         data[column] = data[column].astype("string").str.strip()
+
+    for column in DATE_COLUMNS:
+        data[column] = parse_production_date(data[column])
+
     for column in NUMERIC_COLUMNS:
         data[column] = pd.to_numeric(
             data[column].astype(str).str.replace(",", "", regex=False).str.replace("，", "", regex=False).str.strip(),
@@ -186,11 +215,19 @@ def prepare_data(source_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         for column in ["線別", "鍍製別", "上鍍層", "產出鋼捲號碼"]
     })
     invalid_numeric = data[NUMERIC_COLUMNS].isna()
+    invalid_date = data["生產日期"].isna()
     target_invalid = data["鍍層目標值"].le(0)
     lower_invalid = data["鍍層下限值"].le(0)
     lower_above_target = data["鍍層下限值"] > data["鍍層目標值"]
     
-    rejected_mask = (invalid_text.any(axis=1) | invalid_numeric.any(axis=1) | target_invalid | lower_invalid | lower_above_target)
+    rejected_mask = (
+        invalid_text.any(axis=1)
+        | invalid_numeric.any(axis=1)
+        | invalid_date
+        | target_invalid
+        | lower_invalid
+        | lower_above_target
+    )
 
     reasons = pd.Series("", index=data.index, dtype="string")
     def append_reason(mask: pd.Series, text: str) -> None:
@@ -220,6 +257,7 @@ def aggregate_to_one_row_per_coil(valid_df: pd.DataFrame) -> pd.DataFrame:
         return valid_df.copy()
     group_columns = ["線別", "鍍製別", "上鍍層", "鍍層目標值", "鍍層下限值", "訂單號碼", "產出鋼捲號碼"]
     aggregation = {
+        "生產日期": "min",
         "XRAY_A_T_N": "mean", "XRAY_A_T_C": "mean", "XRAY_A_T_S": "mean",
         "XRAY_A_B_N": "mean", "XRAY_A_B_C": "mean", "XRAY_A_B_S": "mean",
     }
@@ -833,7 +871,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         <h1>XRAY 鍍層厚度管理報告 (XRAY Coating Thickness Audit)</h1>
         <div class="scope">
             <strong>產線 (Line):</strong> {production_line} &nbsp;|&nbsp;
-            <strong>報告時間 (Report Time):</strong> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} <br>
+            <strong>分析期間 (Analysis Period):</strong> {analysis_period} <br>
             <strong>資料層級 (Analysis Level):</strong> 一捲一筆 (One row per coil) &nbsp;|&nbsp;
             <strong>總捲數 (Total Output Coils):</strong> {total_coils:,}
         </div>
@@ -1095,6 +1133,13 @@ filtered_df = filtered_df.sort_values(
 # created before new derived columns were added.
 filtered_df = calculate_derived_metrics(filtered_df)
 
+production_dates_ui = pd.to_datetime(filtered_df["生產日期"], errors="coerce").dropna()
+if not production_dates_ui.empty:
+    ui_start = production_dates_ui.min().strftime("%Y-%m-%d")
+    ui_end = production_dates_ui.max().strftime("%Y-%m-%d")
+    ui_period = ui_start if ui_start == ui_end else f"{ui_start} ~ {ui_end}"
+    st.caption(f"Analysis Period (生產日期): {ui_period}")
+
 
 # =========================================================
 # 12. KPI AND SUMMARY
@@ -1243,7 +1288,7 @@ if "html_report" in st.session_state:
 st.sidebar.divider()
 st.sidebar.subheader("Data Exports")
 if st.sidebar.button("Prepare Excel Export", use_container_width=True):
-    detail_cols = ["線別", "鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼", "鍍層目標值", "鍍層下限值", "Coil Average Thickness", "Coil Status"]
+    detail_cols = ["生產日期", "線別", "鍍製別", "上鍍層", "訂單號碼", "產出鋼捲號碼", "鍍層目標值", "鍍層下限值", "Coil Average Thickness", "Coil Status"]
     export_bytes = create_excel_export(filtered_df[detail_cols], summary_df, rejected_df)
     st.sidebar.download_button(
         label="Download Excel Data",
