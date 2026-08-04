@@ -33,7 +33,6 @@ st.caption(
 # 2. CONSTANTS
 # =========================================================
 REQUIRED_COLUMNS = [
-    "生產日期",
     "線別",
     "鍍製別",
     "上鍍層",
@@ -69,7 +68,12 @@ NUMERIC_COLUMNS = [
 ]
 
 
-DATE_COLUMNS = ["生產日期"]
+PRODUCTION_DATE_ALIASES = [
+    "生產日期",
+    "生產日期生產日期",
+    "生產日",
+    "Production Date",
+]
 
 
 # =========================================================
@@ -174,21 +178,44 @@ def calculate_derived_metrics(valid_df: pd.DataFrame) -> pd.DataFrame:
     return valid
 
 
+def resolve_production_date_column(data: pd.DataFrame) -> pd.DataFrame:
+    """Create a standardized 生產日期 column from known source-column aliases."""
+    result = data.copy()
+
+    if "生產日期" in result.columns:
+        return result
+
+    for alias in PRODUCTION_DATE_ALIASES:
+        if alias in result.columns:
+            result["生產日期"] = result[alias]
+            return result
+
+    # Keep the app and report usable even when the source has no date column.
+    result["生產日期"] = pd.NaT
+    return result
+
+
 def parse_production_date(series: pd.Series) -> pd.Series:
-    """Parse production dates from normal date strings or Excel serial dates."""
+    """Parse normal date strings and Excel serial dates safely."""
     raw = series.copy()
+    parsed = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns]")
 
-    # First try ordinary date parsing.
-    parsed = pd.to_datetime(raw, errors="coerce")
-
-    # For values still not parsed, try Excel serial-date conversion.
     numeric = pd.to_numeric(raw, errors="coerce")
-    excel_mask = parsed.isna() & numeric.notna()
+
+    # Typical Excel serial dates are roughly 20,000–80,000.
+    excel_mask = numeric.between(20000, 80000, inclusive="both")
     if excel_mask.any():
         parsed.loc[excel_mask] = pd.to_datetime(
             numeric.loc[excel_mask],
             unit="D",
             origin="1899-12-30",
+            errors="coerce",
+        )
+
+    normal_mask = ~excel_mask
+    if normal_mask.any():
+        parsed.loc[normal_mask] = pd.to_datetime(
+            raw.loc[normal_mask],
             errors="coerce",
         )
 
@@ -198,11 +225,12 @@ def parse_production_date(series: pd.Series) -> pd.Series:
 @st.cache_data(show_spinner=False)
 def prepare_data(source_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     data = normalize_columns(source_df)
+    data = resolve_production_date_column(data)
+
     for column in TEXT_COLUMNS:
         data[column] = data[column].astype("string").str.strip()
 
-    for column in DATE_COLUMNS:
-        data[column] = parse_production_date(data[column])
+    data["生產日期"] = parse_production_date(data["生產日期"])
 
     for column in NUMERIC_COLUMNS:
         data[column] = pd.to_numeric(
@@ -215,7 +243,6 @@ def prepare_data(source_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         for column in ["線別", "鍍製別", "上鍍層", "產出鋼捲號碼"]
     })
     invalid_numeric = data[NUMERIC_COLUMNS].isna()
-    invalid_date = data["生產日期"].isna()
     target_invalid = data["鍍層目標值"].le(0)
     lower_invalid = data["鍍層下限值"].le(0)
     lower_above_target = data["鍍層下限值"] > data["鍍層目標值"]
@@ -223,7 +250,6 @@ def prepare_data(source_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     rejected_mask = (
         invalid_text.any(axis=1)
         | invalid_numeric.any(axis=1)
-        | invalid_date
         | target_invalid
         | lower_invalid
         | lower_above_target
@@ -1133,7 +1159,10 @@ filtered_df = filtered_df.sort_values(
 # created before new derived columns were added.
 filtered_df = calculate_derived_metrics(filtered_df)
 
-production_dates_ui = pd.to_datetime(filtered_df["生產日期"], errors="coerce").dropna()
+production_dates_ui = pd.to_datetime(
+    filtered_df.get("生產日期", pd.Series(index=filtered_df.index, dtype="datetime64[ns]")),
+    errors="coerce",
+).dropna()
 if not production_dates_ui.empty:
     ui_start = production_dates_ui.min().strftime("%Y-%m-%d")
     ui_end = production_dates_ui.max().strftime("%Y-%m-%d")
@@ -1271,9 +1300,13 @@ st.sidebar.subheader("Management Reports")
 st.sidebar.info("The HTML report uses the same chart functions and current thresholds shown in the app.")
 
 if st.sidebar.button("Prepare HTML Report", use_container_width=True):
-    with st.spinner("Rendering HTML Report..."):
-        html_data = create_html_report(summary_df, filtered_df)
-        st.session_state["html_report"] = html_data
+    try:
+        with st.spinner("Rendering HTML Report..."):
+            html_data = create_html_report(summary_df, filtered_df)
+            st.session_state["html_report"] = html_data
+        st.sidebar.success("HTML report is ready.")
+    except Exception as exc:
+        st.sidebar.error(f"HTML report generation failed: {exc}")
 
 if "html_report" in st.session_state:
     st.sidebar.download_button(
