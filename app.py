@@ -414,46 +414,18 @@ def finalize_chart(fig):
     fig.tight_layout()
     return fig
 
-def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_type: str):
-    chart_df = coating_summary.copy().sort_values("Average_Target_Deviation", ascending=True)
-    labels = (
-        chart_df["上鍍層"].astype(str)
-        + " | Target " + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
-        + " | Lower " + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
-    )
-    y = np.arange(len(chart_df))
-    bar_height = 0.36
-    fig_height = max(4.8, len(chart_df) * 0.48)
-    
-    # Tăng figsize lên 14 để đủ không gian chứa dòng text dài
-    fig, ax = plt.subplots(figsize=(14, fig_height), dpi=150)
-
-    target_bars = ax.barh(y - bar_height / 2, chart_df["Average_Target_Deviation"], height=bar_height, label="Average Target Deviation")
-    lower_bars = ax.barh(y + bar_height / 2, chart_df["Average_Lower_Limit_Margin"], height=bar_height, label="Average Lower-Limit Margin")
-
-    ax.axvline(0, linewidth=1.2, color="#333333")
-    ax.set_yticks(y)
-    ax.set_yticklabels(labels, fontsize=10)
-    ax.set_title(f"{coating_type} — Target and Lower-Limit Difference", pad=16, fontweight="bold")
-    ax.set_xlabel("Thickness Difference")
-    ax.grid(True, axis="x", alpha=0.3)
-    ax.legend(loc="lower right")
-
-    max_abs = max(chart_df["Average_Target_Deviation"].abs().max(), chart_df["Average_Lower_Limit_Margin"].abs().max(), 1)
-    offset = max_abs * 0.02
-
-    # Thêm text cho thanh Mục tiêu (Target Deviation)
+# Thêm text cho thanh Mục tiêu (Target Deviation)
     for i, (bar, (_, row)) in enumerate(zip(target_bars, chart_df.iterrows())):
         value = bar.get_width()
         total = int(row["Coil_Count"])
         below_target = int(row["Coils_Below_Target"])
         above_target = total - below_target
         
-        # Ghi chú: Dày hơn mục tiêu (≥目標) hoặc Mỏng hơn mục tiêu (<目標)
+        # SỬ DỤNG TIẾNG ANH ĐỂ TRÁNH LỖI FONT MATPLOTLIB
         if value >= 0:
-            note = f" (≥目標: {above_target}/{total})"
+            note = f" (≥ Target: {above_target}/{total})"
         else:
-            note = f" (<目標: {below_target}/{total})"
+            note = f" (< Target: {below_target}/{total})"
             
         ax.text(
             value + offset if value >= 0 else value - offset, 
@@ -469,18 +441,18 @@ def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_typ
         below_limit = int(row["Coils_With_Position_Below_Limit"])
         above_limit = total - below_limit
         
-        # Ghi chú: An toàn (≥下限) hoặc Dưới giới hạn (<下限)
+        # SỬ DỤNG TIẾNG ANH ĐỂ TRÁNH LỖI FONT MATPLOTLIB
         if value >= 0:
-            note = f" (≥下限: {above_limit}/{total})"
+            note = f" (≥ Lower: {above_limit}/{total})"
         else:
-            note = f" (<下限: {below_limit}/{total})"
+            note = f" (< Lower: {below_limit}/{total})"
             
         ax.text(
             value + offset if value >= 0 else value - offset, 
             bar.get_y() + bar.get_height() / 2,
             f"{value:.2f}{note}", 
             va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
-        )
+        ))
         
     # Mở rộng giới hạn trục X thêm 35% mỗi bên để chữ không bị tràn viền
     current_xlim = ax.get_xlim()
