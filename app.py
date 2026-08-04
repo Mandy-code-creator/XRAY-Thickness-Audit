@@ -437,68 +437,139 @@ def finalize_chart(fig):
     return fig
 
 
-def plot_target_limit_by_coating_type(coating_summary: pd.DataFrame, coating_type: str):
-    chart_df = coating_summary.copy().sort_values("Average_Target_Deviation", ascending=True)
+def plot_target_limit_by_coating_type(
+    coating_summary: pd.DataFrame,
+    coating_type: str,
+):
+    """Plot target and lower-limit differences without overlapping labels."""
+    chart_df = (
+        coating_summary.copy()
+        .sort_values("Average_Target_Deviation", ascending=True)
+        .reset_index(drop=True)
+    )
+
+    if chart_df.empty:
+        fig, ax = plt.subplots(figsize=(12, 3), dpi=150)
+        ax.text(0.5, 0.5, "No data available", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
     labels = (
         chart_df["上鍍層"].astype(str)
-        + " | Target " + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
-        + " | Lower " + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
+        + " | Target "
+        + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
+        + " | Lower "
+        + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
     )
-    y = np.arange(len(chart_df))
-    bar_height = 0.28 
-    fig_height = max(5.5, len(chart_df) * 0.75) 
-    
-    fig, ax = plt.subplots(figsize=(14, fig_height), dpi=150)
 
-    gap = 0.08
-    target_bars = ax.barh(y - (bar_height / 2 + gap / 2), chart_df["Average_Target_Deviation"], height=bar_height, label="Average Target Deviation")
-    lower_bars = ax.barh(y + (bar_height / 2 + gap / 2), chart_df["Average_Lower_Limit_Margin"], height=bar_height, label="Average Lower-Limit Margin")
+    # Increase spacing between standards and between the two bars in each group.
+    row_step = 1.35
+    y = np.arange(len(chart_df), dtype=float) * row_step
+    bar_offset = 0.26
+    bar_height = 0.22
 
-    ax.axvline(0, linewidth=1.2, color="#333333")
+    fig_height = max(6.0, len(chart_df) * 0.92 + 1.8)
+    fig, ax = plt.subplots(figsize=(15.5, fig_height), dpi=150)
+
+    target_bars = ax.barh(
+        y - bar_offset,
+        chart_df["Average_Target_Deviation"],
+        height=bar_height,
+        label="Average Target Deviation",
+        zorder=3,
+    )
+    lower_bars = ax.barh(
+        y + bar_offset,
+        chart_df["Average_Lower_Limit_Margin"],
+        height=bar_height,
+        label="Average Lower-Limit Margin",
+        zorder=3,
+    )
+
+    ax.axvline(0, linewidth=1.2, color="#333333", zorder=2)
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=10)
-    ax.set_title(f"{coating_type} — Target and Lower-Limit Difference", pad=16, fontweight="bold")
+    ax.set_title(
+        f"{coating_type} — Target and Lower-Limit Difference",
+        pad=18,
+        fontweight="bold",
+    )
     ax.set_xlabel("Thickness Difference")
-    ax.grid(True, axis="x", alpha=0.3)
-    ax.legend(loc="lower right")
+    ax.grid(True, axis="x", alpha=0.25, zorder=1)
+    ax.legend(loc="best", fontsize=9)
 
-    max_abs = max(chart_df["Average_Target_Deviation"].abs().max(), chart_df["Average_Lower_Limit_Margin"].abs().max(), 1)
-    offset = max_abs * 0.02
+    all_values = np.concatenate(
+        [
+            chart_df["Average_Target_Deviation"].to_numpy(dtype=float),
+            chart_df["Average_Lower_Limit_Margin"].to_numpy(dtype=float),
+        ]
+    )
+    data_min = float(np.nanmin(all_values))
+    data_max = float(np.nanmax(all_values))
+    data_span = max(data_max - data_min, abs(data_min), abs(data_max), 1.0)
 
-    for i, (bar, (_, row)) in enumerate(zip(target_bars, chart_df.iterrows())):
-        value = bar.get_width()
+    # Extra room is reserved for the long count labels on both sides.
+    left_padding = data_span * 0.42
+    right_padding = data_span * 0.52
+    ax.set_xlim(min(data_min, 0) - left_padding, max(data_max, 0) + right_padding)
+
+    label_offset = data_span * 0.018
+    label_box = {
+        "boxstyle": "round,pad=0.16",
+        "facecolor": "white",
+        "edgecolor": "none",
+        "alpha": 0.88,
+    }
+
+    def add_bar_label(bar, value: float, text: str) -> None:
+        x = value + label_offset if value >= 0 else value - label_offset
+        ax.text(
+            x,
+            bar.get_y() + bar.get_height() / 2,
+            text,
+            va="center",
+            ha="left" if value >= 0 else "right",
+            fontsize=8.6,
+            color="#1e293b",
+            bbox=label_box,
+            clip_on=False,
+            zorder=5,
+        )
+
+    for bar, (_, row) in zip(target_bars, chart_df.iterrows()):
+        value = float(bar.get_width())
         total = int(row["Coil_Count"])
         below_target = int(row["Coils_Below_Target"])
-        above_target = total - below_target
-        
-        note = f" (≥ Target: {above_target}/{total} | < Target: {below_target})"
-            
-        ax.text(
-            value + offset if value >= 0 else value - offset, 
-            bar.get_y() + bar.get_height() / 2,
-            f"{value:.2f}{note}", 
-            va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
+        at_or_above_target = total - below_target
+        add_bar_label(
+            bar,
+            value,
+            f"{value:.2f}  (≥ Target: {at_or_above_target}/{total} | < Target: {below_target})",
         )
 
-    for i, (bar, (_, row)) in enumerate(zip(lower_bars, chart_df.iterrows())):
-        value = bar.get_width()
+    for bar, (_, row) in zip(lower_bars, chart_df.iterrows()):
+        value = float(bar.get_width())
         total = int(row["Coil_Count"])
         below_limit = int(row["Average_Below_Lower_Limit_Coils"])
-        above_limit = total - below_limit
-        
-        note = f" (≥ Lower: {above_limit}/{total} | < Lower: {below_limit})"
-            
-        ax.text(
-            value + offset if value >= 0 else value - offset, 
-            bar.get_y() + bar.get_height() / 2,
-            f"{value:.2f}{note}", 
-            va="center", ha="left" if value >= 0 else "right", fontsize=9.5, color="#1e293b"
+        at_or_above_limit = total - below_limit
+        add_bar_label(
+            bar,
+            value,
+            f"{value:.2f}  (≥ Lower: {at_or_above_limit}/{total} | < Lower: {below_limit})",
         )
-        
-    current_xlim = ax.get_xlim()
-    ax.set_xlim(current_xlim[0] * 1.45, current_xlim[1] * 1.45)
-    
-    return finalize_chart(fig)
+
+    # Keep each standard visually separated.
+    for center_y in y:
+        ax.axhline(
+            center_y + row_step / 2,
+            color="#e2e8f0",
+            linewidth=0.7,
+            zorder=0,
+        )
+
+    ax.set_ylim(y[-1] + row_step * 0.65, y[0] - row_step * 0.65)
+    fig.subplots_adjust(left=0.28, right=0.98, top=0.90, bottom=0.10)
+    return fig
 
 
 def plot_stability_by_coating_type(coating_summary: pd.DataFrame, coating_type: str):
@@ -682,113 +753,6 @@ def render_three_risk_guide() -> None:
     )
 
 
-def _fmt_standard(row: pd.Series) -> str:
-    return (
-        f"{row['上鍍層']} (T {row['鍍層目標值']:g} / L {row['鍍層下限值']:g})"
-    )
-
-
-def build_target_chart_conclusion(coating_summary: pd.DataFrame) -> str:
-    """Create a short, data-driven conclusion for the target/lower-limit chart."""
-    if coating_summary.empty:
-        return "無可供分析之資料。"
-
-    df = coating_summary.copy()
-    highest = df.loc[df["Average_Target_Deviation"].idxmax()]
-    lowest = df.loc[df["Average_Target_Deviation"].idxmin()]
-    closest_lower = df.loc[df["Average_Lower_Limit_Margin"].idxmin()]
-
-    parts = []
-    if highest["Average_Target_Deviation"] > 0:
-        parts.append(
-            f"{_fmt_standard(highest)}平均鍍層高於目標值{highest['Average_Target_Deviation']:.2f}，為本組最高。"
-        )
-    else:
-        parts.append(
-            f"各規格平均鍍層皆未高於目標值；其中{_fmt_standard(highest)}最接近目標值（偏差{highest['Average_Target_Deviation']:.2f}）。"
-        )
-
-    if lowest["Average_Target_Deviation"] < 0:
-        parts.append(
-            f"{_fmt_standard(lowest)}平均鍍層低於目標值{abs(lowest['Average_Target_Deviation']):.2f}，需優先確認製程設定。"
-        )
-
-    parts.append(
-        f"{_fmt_standard(closest_lower)}之平均值距下限僅{closest_lower['Average_Lower_Limit_Margin']:.2f}，安全餘裕最小。"
-    )
-    return " ".join(parts)
-
-
-def build_stability_chart_conclusion(coating_summary: pd.DataFrame) -> str:
-    """Create a short, data-driven conclusion for the stability chart."""
-    if coating_summary.empty:
-        return "無可供分析之資料。"
-
-    df = coating_summary.copy()
-    reliable = df[df["Stability Grade"] != "Insufficient Data"].copy()
-    insufficient_count = int((df["Stability Grade"] == "Insufficient Data").sum())
-
-    if reliable.empty:
-        return "目前各規格樣本數皆不足，暫不進行穩定度判定。"
-
-    best = reliable.loc[reliable["Relative Stability Variation (%)"].idxmin()]
-    worst = reliable.loc[reliable["Relative Stability Variation (%)"].idxmax()]
-    parts = [
-        f"{_fmt_standard(best)}相對變異最低（{best['Relative Stability Variation (%)']:.2f}%），穩定度最佳。",
-        f"{_fmt_standard(worst)}相對變異最高（{worst['Relative Stability Variation (%)']:.2f}%），建議優先確認生產波動。",
-    ]
-    if insufficient_count:
-        parts.append(f"另有{insufficient_count}個規格因鋼捲數不足，結果僅供參考。")
-    return " ".join(parts)
-
-
-def build_risk_chart_conclusion(coating_summary: pd.DataFrame) -> str:
-    """Create a short, data-driven conclusion for the risk heatmap."""
-    if coating_summary.empty:
-        return "無可供分析之資料。"
-
-    df = coating_summary.sort_values("Risk Priority Score", ascending=False).copy()
-    top = df.iloc[0]
-    total = int(top["Coil_Count"])
-    risk_map = {
-        "Under-Coating": (
-            "低於下限",
-            int(top["Average_Below_Lower_Limit_Coils"]),
-            top["Average Below Limit Rate (%)"],
-        ),
-        "Over-Coating": (
-            "鍍層偏高",
-            int(top["Significant_Over_Coating_Coils"]),
-            top["Significant Over-Coating Rate (%)"],
-        ),
-        "Cross-Width Variation": (
-            "橫向厚度差異",
-            int(top["Cross_Width_Variation_Coils"]),
-            top["Cross-Width Variation Risk Rate (%)"],
-        ),
-    }
-    risk_name, affected, rate = risk_map.get(
-        top["Main Risk"],
-        (str(top["Main Risk"]), 0, 0.0),
-    )
-
-    parts = [
-        f"{_fmt_standard(top)}優先分數最高（{top['Risk Priority Score']:.1f}%），主要風險為{risk_name}，共有{affected}/{total}捲（{rate:.1f}%）被標記。"
-    ]
-
-    under_candidates = df[(df["Coil_Count"] >= df["Minimum Reliable Coils"]) & (df["Average Below Limit Rate (%)"] > 0)]
-    if not under_candidates.empty:
-        under_top = under_candidates.loc[under_candidates["Average Below Limit Rate (%)"].idxmax()]
-        if under_top.name != top.name:
-            parts.append(
-                f"低於下限比例最高者為{_fmt_standard(under_top)}：{int(under_top['Average_Below_Lower_Limit_Coils'])}/{int(under_top['Coil_Count'])}捲（{under_top['Average Below Limit Rate (%)']:.1f}%）。"
-            )
-
-    insufficient_count = int((df["Risk Priority"] == "Insufficient Data").sum())
-    if insufficient_count:
-        parts.append(f"另有{insufficient_count}個規格樣本數不足，不建議據此直接作製程決策。")
-    return " ".join(parts)
-
 
 # =========================================================
 # 6. HTML REPORT EXPORT (FOR MANAGEMENT)
@@ -882,23 +846,19 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         html += f"<h2>鍍製別 (Coating Type): {c_type}</h2>"
 
         fig_target = plot_target_limit_by_coating_type(c_summary, c_type)
-        target_conclusion = build_target_chart_conclusion(c_summary)
         html += f"""
         <div class='chart-container'>
             <h3>1. 目標與下限差異 (Target and Lower-Limit Difference)</h3>
             <img src='data:image/png;base64,{fig_to_base64(fig_target)}'>
-            <div class='chart-conclusion'><strong>圖表結論：</strong>{target_conclusion}</div>
         </div>
         """
         plt.close(fig_target)
 
         fig_stab = plot_stability_by_coating_type(c_summary, c_type)
-        stability_conclusion = build_stability_chart_conclusion(c_summary)
         html += f"""
         <div class='chart-container'>
             <h3>2. 生產穩定度 (Stability Grade)</h3>
             <img src='data:image/png;base64,{fig_to_base64(fig_stab)}'>
-            <div class='chart-conclusion'><strong>圖表結論：</strong>{stability_conclusion}</div>
         </div>
         """
         plt.close(fig_stab)
@@ -922,7 +882,6 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                     </ul>
                 </div>
             </div>
-            <div class='chart-conclusion'><strong>圖表結論：</strong>{build_risk_chart_conclusion(c_summary)}</div>
         </div>
         """
         plt.close(fig_risk)
