@@ -157,7 +157,7 @@ def calculate_derived_metrics(valid_df: pd.DataFrame) -> pd.DataFrame:
     })
     
     # -------------------------------------------------------------
-    # CẬP NHẬT LOGIC: ĐÁNH GIÁ MỎNG (NG) DỰA TRÊN ĐỘ DÀY TRUNG BÌNH
+    # LOGIC CẬP NHẬT: ĐÁNH GIÁ LỖI MỎNG THEO ĐỘ DÀY TRUNG BÌNH CUỘN
     # -------------------------------------------------------------
     valid["Average Below Lower Limit"] = valid["Coil Average Thickness"] < valid["鍍層下限值"]
     valid["Average Below Target"] = valid["Coil Average Thickness"] < valid["鍍層目標值"]
