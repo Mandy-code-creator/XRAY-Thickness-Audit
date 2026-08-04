@@ -770,14 +770,14 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                 "Priority Score", "Risk Priority", "Stability Grade",
             ]
         ].rename(
-            columns={{
+            columns={
                 "上鍍層": "Upper Coating",
                 "鍍層目標值": "Target",
                 "鍍層下限值": "Lower",
                 "Coil_Count": "Total Coils",
                 "Risk Priority": "Priority",
                 "Stability Grade": "Stability",
-            }}
+            }
         )
 
         table_html = compact_table.to_html(
