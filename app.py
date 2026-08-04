@@ -898,19 +898,137 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             .badge-medium {{ background-color: #fef3c7; color: #92400e; }}
             .badge-low {{ background-color: #f0fdf4; color: #166534; }}
             .badge-ins {{ background-color: #f1f5f9; color: #475569; }}
-            @page {{ size: A4 landscape; margin: 10mm; }}
+            @page {{
+                size: A4 landscape;
+                margin: 8mm;
+            }}
+
             @media print {{
-                body {{ margin: 0; max-width: none; font-size: 11px; }}
-                h1 {{ font-size: 18px; }}
-                h2 {{ font-size: 14px; margin-top: 18px; }}
-                h3 {{ font-size: 12px; margin-top: 14px; }}
-                .chart-container {{ margin-bottom: 15px; page-break-inside: avoid; }}
-                .chart-conclusion {{ font-size: 10px; padding: 6px 8px; margin-top: 6px; }}
-                .table-wrap {{ overflow: visible; page-break-inside: auto; box-shadow: none; border: 1px solid #e2e8f0; }}
-                table.custom-table {{ font-size: 9.5px; }}
-                table.custom-table th, table.custom-table td {{ padding: 4px 3px; }}
-                table.custom-table tr {{ page-break-inside: avoid; }}
-                img {{ box-shadow: none; padding: 4px; }}
+                html, body {{
+                    width: 100%;
+                    margin: 0;
+                    padding: 0;
+                }}
+
+                body {{
+                    max-width: none;
+                    font-size: 10px;
+                    line-height: 1.35;
+                    -webkit-print-color-adjust: exact;
+                    print-color-adjust: exact;
+                }}
+
+                h1 {{
+                    font-size: 18px;
+                    margin: 0 0 8px;
+                }}
+
+                h2 {{
+                    font-size: 14px;
+                    margin: 10px 0 6px;
+                    page-break-after: avoid;
+                    break-after: avoid-page;
+                }}
+
+                h3 {{
+                    font-size: 12px;
+                    margin: 0 0 5px;
+                    page-break-after: avoid;
+                    break-after: avoid-page;
+                }}
+
+                .scope {{
+                    margin-bottom: 8px;
+                    padding: 7px 10px;
+                }}
+
+                .chart-container {{
+                    width: 100%;
+                    margin: 0;
+                    padding: 0;
+                    page-break-before: always;
+                    break-before: page;
+                    page-break-inside: avoid;
+                    break-inside: avoid-page;
+                }}
+
+                .chart-container img,
+                .risk-chart img {{
+                    display: block;
+                    width: auto !important;
+                    max-width: 100% !important;
+                    height: auto !important;
+                    max-height: 165mm !important;
+                    margin: 0 auto;
+                    padding: 2px;
+                    box-sizing: border-box;
+                    object-fit: contain;
+                    box-shadow: none;
+                }}
+
+                .risk-layout {{
+                    display: block !important;
+                    width: 100% !important;
+                }}
+
+                .risk-chart {{
+                    width: 100% !important;
+                    max-width: 100% !important;
+                }}
+
+                .risk-guide {{
+                    width: 100% !important;
+                    max-width: 100% !important;
+                    box-sizing: border-box;
+                    margin-top: 5px;
+                    padding: 5px 8px;
+                    font-size: 8.5px;
+                    page-break-inside: avoid;
+                    break-inside: avoid-page;
+                }}
+
+                .risk-guide h4 {{
+                    margin: 0 0 3px;
+                }}
+
+                .risk-guide ul {{
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    column-gap: 18px;
+                    margin: 0;
+                    padding-left: 16px;
+                }}
+
+                .table-wrap {{
+                    width: 100%;
+                    overflow: visible;
+                    page-break-before: always;
+                    break-before: page;
+                    page-break-inside: auto;
+                    box-shadow: none;
+                    border: 1px solid #e2e8f0;
+                }}
+
+                table.custom-table {{
+                    width: 100%;
+                    font-size: 8px;
+                    table-layout: fixed;
+                }}
+
+                table.custom-table th,
+                table.custom-table td {{
+                    padding: 3px 2px;
+                    line-height: 1.2;
+                }}
+
+                table.custom-table thead {{
+                    display: table-header-group;
+                }}
+
+                table.custom-table tr {{
+                    page-break-inside: avoid;
+                    break-inside: avoid-page;
+                }}
             }}
         </style>
     </head>
