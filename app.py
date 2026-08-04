@@ -643,6 +643,114 @@ def render_three_risk_guide() -> None:
     )
 
 
+def _fmt_standard(row: pd.Series) -> str:
+    return (
+        f"{row['上鍍層']} (T {row['鍍層目標值']:g} / L {row['鍍層下限值']:g})"
+    )
+
+
+def build_target_chart_conclusion(coating_summary: pd.DataFrame) -> str:
+    """Create a short, data-driven conclusion for the target/lower-limit chart."""
+    if coating_summary.empty:
+        return "無可供分析之資料。"
+
+    df = coating_summary.copy()
+    highest = df.loc[df["Average_Target_Deviation"].idxmax()]
+    lowest = df.loc[df["Average_Target_Deviation"].idxmin()]
+    closest_lower = df.loc[df["Average_Lower_Limit_Margin"].idxmin()]
+
+    parts = []
+    if highest["Average_Target_Deviation"] > 0:
+        parts.append(
+            f"{_fmt_standard(highest)}平均鍍層高於目標值{highest['Average_Target_Deviation']:.2f}，為本組最高。"
+        )
+    else:
+        parts.append(
+            f"各規格平均鍍層皆未高於目標值；其中{_fmt_standard(highest)}最接近目標值（偏差{highest['Average_Target_Deviation']:.2f}）。"
+        )
+
+    if lowest["Average_Target_Deviation"] < 0:
+        parts.append(
+            f"{_fmt_standard(lowest)}平均鍍層低於目標值{abs(lowest['Average_Target_Deviation']):.2f}，需優先確認製程設定。"
+        )
+
+    parts.append(
+        f"{_fmt_standard(closest_lower)}之平均值距下限僅{closest_lower['Average_Lower_Limit_Margin']:.2f}，安全餘裕最小。"
+    )
+    return " ".join(parts)
+
+
+def build_stability_chart_conclusion(coating_summary: pd.DataFrame) -> str:
+    """Create a short, data-driven conclusion for the stability chart."""
+    if coating_summary.empty:
+        return "無可供分析之資料。"
+
+    df = coating_summary.copy()
+    reliable = df[df["Stability Grade"] != "Insufficient Data"].copy()
+    insufficient_count = int((df["Stability Grade"] == "Insufficient Data").sum())
+
+    if reliable.empty:
+        return "目前各規格樣本數皆不足，暫不進行穩定度判定。"
+
+    best = reliable.loc[reliable["Relative Stability Variation (%)"].idxmin()]
+    worst = reliable.loc[reliable["Relative Stability Variation (%)"].idxmax()]
+    parts = [
+        f"{_fmt_standard(best)}相對變異最低（{best['Relative Stability Variation (%)']:.2f}%），穩定度最佳。",
+        f"{_fmt_standard(worst)}相對變異最高（{worst['Relative Stability Variation (%)']:.2f}%），建議優先確認生產波動。",
+    ]
+    if insufficient_count:
+        parts.append(f"另有{insufficient_count}個規格因鋼捲數不足，結果僅供參考。")
+    return " ".join(parts)
+
+
+def build_risk_chart_conclusion(coating_summary: pd.DataFrame) -> str:
+    """Create a short, data-driven conclusion for the risk heatmap."""
+    if coating_summary.empty:
+        return "無可供分析之資料。"
+
+    df = coating_summary.sort_values("Risk Priority Score", ascending=False).copy()
+    top = df.iloc[0]
+    total = int(top["Coil_Count"])
+    risk_map = {
+        "Under-Coating": (
+            "低於下限",
+            int(top["Coils_With_Position_Below_Limit"]),
+            top["Position Below Limit Rate (%)"],
+        ),
+        "Over-Coating": (
+            "鍍層偏高",
+            int(top["Significant_Over_Coating_Coils"]),
+            top["Significant Over-Coating Rate (%)"],
+        ),
+        "Cross-Width Variation": (
+            "橫向厚度差異",
+            int(top["Cross_Width_Variation_Coils"]),
+            top["Cross-Width Variation Risk Rate (%)"],
+        ),
+    }
+    risk_name, affected, rate = risk_map.get(
+        top["Main Risk"],
+        (str(top["Main Risk"]), 0, 0.0),
+    )
+
+    parts = [
+        f"{_fmt_standard(top)}優先分數最高（{top['Risk Priority Score']:.1f}%），主要風險為{risk_name}，共有{affected}/{total}捲（{rate:.1f}%）被標記。"
+    ]
+
+    under_candidates = df[(df["Coil_Count"] >= df["Minimum Reliable Coils"]) & (df["Position Below Limit Rate (%)"] > 0)]
+    if not under_candidates.empty:
+        under_top = under_candidates.loc[under_candidates["Position Below Limit Rate (%)"].idxmax()]
+        if under_top.name != top.name:
+            parts.append(
+                f"低於下限比例最高者為{_fmt_standard(under_top)}：{int(under_top['Coils_With_Position_Below_Limit'])}/{int(under_top['Coil_Count'])}捲（{under_top['Position Below Limit Rate (%)']:.1f}%）。"
+            )
+
+    insufficient_count = int((df["Risk Priority"] == "Insufficient Data").sum())
+    if insufficient_count:
+        parts.append(f"另有{insufficient_count}個規格樣本數不足，不建議據此直接作製程決策。")
+    return " ".join(parts)
+
+
 # =========================================================
 # 6. HTML REPORT EXPORT (FOR MANAGEMENT)
 # =========================================================
@@ -663,7 +771,9 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             h2 {{ color: #20639b; margin-top: 40px; border-left: 5px solid #20639b; padding-left: 10px; background-color: #f4f8fb; }}
             h3 {{ color: #333; margin-top: 30px; }}
             .scope {{ background: #f7f9fb; border: 1px solid #dfe7ee; padding: 14px 18px; border-radius: 5px; margin-bottom: 30px; }}
-            .chart-container {{ margin-bottom: 50px; }}
+            .chart-container {{ margin-bottom: 32px; page-break-inside: avoid; }}
+            .chart-conclusion {{ margin: 10px 0 4px; padding: 9px 12px; border-left: 4px solid #4f7b95; background: #f4f8fb; font-size: 12px; line-height: 1.45; text-align: left; }}
+            .chart-conclusion strong {{ color: #1f4e68; }}
             .risk-layout {{ display: flex; gap: 22px; align-items: flex-start; }}
             .risk-chart {{ flex: 1 1 78%; text-align: center; }}
             .risk-guide {{ flex: 0 0 250px; border: 1px solid #d9e2ea; background: #f8fafc; border-radius: 6px; padding: 14px 16px; font-size: 13px; }}
@@ -671,30 +781,30 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             .risk-guide ul {{ padding-left: 18px; margin-bottom: 0; }}
             img {{ max-width: 100%; height: auto; border: 1px solid #e0e0e0; border-radius: 4px; padding: 10px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
             .table-wrap {{ width: 100%; overflow-x: auto; margin-bottom: 28px; }}
-            table.compact-summary {{ border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 9.5px; line-height: 1.25; }}
-            table.compact-summary th, table.compact-summary td {{ border: 1px solid #cfd8df; padding: 4px 5px; text-align: center; vertical-align: middle; word-break: break-word; }}
+            table.compact-summary {{ border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 9px; line-height: 1.18; }}
+            table.compact-summary th, table.compact-summary td {{ border: 1px solid #cfd8df; padding: 3px 4px; text-align: center; vertical-align: middle; word-break: normal; overflow-wrap: anywhere; }}
             table.compact-summary th {{ background-color: #eaf1f6; font-weight: 700; color: #1f3545; }}
             table.compact-summary tr:nth-child(even) {{ background-color: #f8fafc; }}
-            table.compact-summary th:nth-child(1), table.compact-summary td:nth-child(1) {{ width: 12%; text-align: left; }}
-            table.compact-summary th:nth-child(2), table.compact-summary td:nth-child(2),
-            table.compact-summary th:nth-child(3), table.compact-summary td:nth-child(3) {{ width: 7%; }}
-            table.compact-summary th:nth-child(4), table.compact-summary td:nth-child(4) {{ width: 7%; }}
-            table.compact-summary th:nth-child(5), table.compact-summary td:nth-child(5),
-            table.compact-summary th:nth-child(6), table.compact-summary td:nth-child(6),
-            table.compact-summary th:nth-child(7), table.compact-summary td:nth-child(7) {{ width: 13%; }}
-            table.compact-summary th:nth-child(8), table.compact-summary td:nth-child(8) {{ width: 9%; }}
-            table.compact-summary th:nth-child(9), table.compact-summary td:nth-child(9),
-            table.compact-summary th:nth-child(10), table.compact-summary td:nth-child(10) {{ width: 9%; }}
+            table.compact-summary th:nth-child(1), table.compact-summary td:nth-child(1) {{ width: 22%; text-align: left; }}
+            table.compact-summary th:nth-child(2), table.compact-summary td:nth-child(2) {{ width: 7%; }}
+            table.compact-summary th:nth-child(3), table.compact-summary td:nth-child(3),
+            table.compact-summary th:nth-child(4), table.compact-summary td:nth-child(4),
+            table.compact-summary th:nth-child(5), table.compact-summary td:nth-child(5) {{ width: 13%; }}
+            table.compact-summary th:nth-child(6), table.compact-summary td:nth-child(6) {{ width: 9%; }}
+            table.compact-summary th:nth-child(7), table.compact-summary td:nth-child(7),
+            table.compact-summary th:nth-child(8), table.compact-summary td:nth-child(8) {{ width: 11%; }}
             @page {{ size: A4 landscape; margin: 10mm; }}
             @media print {{
                 body {{ margin: 0; max-width: none; font-size: 10px; }}
                 h1 {{ font-size: 18px; }}
                 h2 {{ font-size: 14px; margin-top: 18px; }}
                 h3 {{ font-size: 12px; margin-top: 14px; }}
-                .chart-container {{ margin-bottom: 20px; page-break-inside: avoid; }}
-                .table-wrap {{ overflow: visible; page-break-inside: avoid; }}
-                table.compact-summary {{ font-size: 8.2px; }}
-                table.compact-summary th, table.compact-summary td {{ padding: 3px 3px; }}
+                .chart-container {{ margin-bottom: 15px; page-break-inside: avoid; }}
+                .chart-conclusion {{ font-size: 9.2px; padding: 6px 8px; margin-top: 6px; }}
+                .table-wrap {{ overflow: visible; page-break-inside: auto; }}
+                table.compact-summary {{ font-size: 7.6px; }}
+                table.compact-summary th, table.compact-summary td {{ padding: 2px 2px; }}
+                table.compact-summary tr {{ page-break-inside: avoid; }}
                 img {{ box-shadow: none; padding: 4px; }}
             }}
             @media (max-width: 900px) {{ .risk-layout {{ display: block; }} .risk-guide {{ margin-top: 15px; }} }}
@@ -715,11 +825,25 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         html += f"<h2>鍍製別 (Coating Type): {c_type}</h2>"
 
         fig_target = plot_target_limit_by_coating_type(c_summary, c_type)
-        html += f"<div class='chart-container'><h3>1. 目標與下限差異 (Target and Lower-Limit Difference)</h3><img src='data:image/png;base64,{fig_to_base64(fig_target)}'></div>"
+        target_conclusion = build_target_chart_conclusion(c_summary)
+        html += f"""
+        <div class='chart-container'>
+            <h3>1. 目標與下限差異 (Target and Lower-Limit Difference)</h3>
+            <img src='data:image/png;base64,{fig_to_base64(fig_target)}'>
+            <div class='chart-conclusion'><strong>圖表結論：</strong>{target_conclusion}</div>
+        </div>
+        """
         plt.close(fig_target)
 
         fig_stab = plot_stability_by_coating_type(c_summary, c_type)
-        html += f"<div class='chart-container'><h3>2. 生產穩定度 (Stability Grade)</h3><img src='data:image/png;base64,{fig_to_base64(fig_stab)}'></div>"
+        stability_conclusion = build_stability_chart_conclusion(c_summary)
+        html += f"""
+        <div class='chart-container'>
+            <h3>2. 生產穩定度 (Stability Grade)</h3>
+            <img src='data:image/png;base64,{fig_to_base64(fig_stab)}'>
+            <div class='chart-conclusion'><strong>圖表結論：</strong>{stability_conclusion}</div>
+        </div>
+        """
         plt.close(fig_stab)
 
         fig_risk = plot_three_risks_by_coating_type(c_summary, c_type)
@@ -741,6 +865,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                     </ul>
                 </div>
             </div>
+            <div class='chart-conclusion'><strong>圖表結論：</strong>{build_risk_chart_conclusion(c_summary)}</div>
         </div>
         """
         plt.close(fig_risk)
@@ -763,18 +888,18 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             lambda value: f"{value:.1f}%"
         )
 
+        compact_table["Standard"] = compact_table.apply(
+            lambda row: f"{row['上鍍層']}<br>T {row['鍍層目標值']:g} / L {row['鍍層下限值']:g}",
+            axis=1,
+        )
         compact_table = compact_table[
             [
-                "上鍍層", "鍍層目標值", "鍍層下限值", "Coil_Count",
-                "Under-Coating", "Over-Coating", "Cross-Width",
-                "Priority Score", "Risk Priority", "Stability Grade",
+                "Standard", "Coil_Count", "Under-Coating", "Over-Coating",
+                "Cross-Width", "Priority Score", "Risk Priority", "Stability Grade",
             ]
         ].rename(
             columns={
-                "上鍍層": "Upper Coating",
-                "鍍層目標值": "Target",
-                "鍍層下限值": "Lower",
-                "Coil_Count": "Total Coils",
+                "Coil_Count": "Total",
                 "Risk Priority": "Priority",
                 "Stability Grade": "Stability",
             }
