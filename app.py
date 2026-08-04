@@ -444,67 +444,81 @@ def plot_stability_by_coating_type(coating_summary: pd.DataFrame, coating_type: 
 
 
 def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type: str):
+    """Risk matrix: X=under-coating, Y=over-coating, bubble size=coil count, color=unevenness."""
     chart_df = coating_summary.copy()
     chart_df["Standard Label"] = (
         chart_df["上鍍層"].astype(str)
-        + " | Target " + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
-        + " | Lower " + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
-        + " | n=" + chart_df["Coil_Count"].astype(int).astype(str)
+        + " | T" + chart_df["鍍層目標值"].map(lambda value: f"{value:g}")
+        + " | L" + chart_df["鍍層下限值"].map(lambda value: f"{value:g}")
     )
-    chart_df = chart_df.sort_values("Risk Priority Score", ascending=True)
 
-    y = np.arange(len(chart_df))
-    bar_height = 0.24
-    fig_height = max(5.4, len(chart_df) * 0.62)
-    fig, ax = plt.subplots(figsize=(12.5, fig_height))
+    x = chart_df["Position Below Limit Rate (%)"].fillna(0)
+    y = chart_df["Significant Over-Coating Rate (%)"].fillna(0)
+    uneven = chart_df["Uneven Coating Rate (%)"].fillna(0)
+    coil_count = chart_df["Coil_Count"].fillna(1).clip(lower=1)
 
-    under_bars = ax.barh(
-        y - bar_height,
-        chart_df["Position Below Limit Rate (%)"],
-        height=bar_height,
-        label="Under-Coating Risk",
-    )
-    over_bars = ax.barh(
+    # Bubble size is scaled by coil count so groups with more evidence are visually stronger.
+    size_min, size_max = 90, 900
+    if coil_count.max() == coil_count.min():
+        bubble_size = np.full(len(chart_df), 320.0)
+    else:
+        bubble_size = size_min + (coil_count - coil_count.min()) / (coil_count.max() - coil_count.min()) * (size_max - size_min)
+
+    fig, ax = plt.subplots(figsize=(12.5, 8.0))
+    scatter = ax.scatter(
+        x,
         y,
-        chart_df["Significant Over-Coating Rate (%)"],
-        height=bar_height,
-        label="Significant Over-Coating Risk",
-    )
-    uneven_bars = ax.barh(
-        y + bar_height,
-        chart_df["Uneven Coating Rate (%)"],
-        height=bar_height,
-        label="Cross-Width Unevenness Risk",
+        s=bubble_size,
+        c=uneven,
+        cmap="YlOrRd",
+        alpha=0.82,
+        edgecolors="black",
+        linewidths=0.8,
     )
 
-    ax.set_yticks(y)
-    ax.set_yticklabels(chart_df["Standard Label"])
-    ax.set_title(f"{coating_type} — Three-Risk Priority Overview", pad=16)
-    ax.set_xlabel("Coil Risk Rate (%)")
-    ax.grid(True, axis="x", alpha=0.3)
-    ax.legend(loc="lower right")
+    # Management reference lines. These divide the chart into four practical priority zones.
+    under_reference = 20.0
+    over_reference = 20.0
+    ax.axvline(under_reference, linestyle="--", linewidth=1.3, color="deepskyblue")
+    ax.axhline(over_reference, linestyle="--", linewidth=1.3, color="deepskyblue")
 
-    max_rate = max(
-        chart_df["Position Below Limit Rate (%)"].max(),
-        chart_df["Significant Over-Coating Rate (%)"].max(),
-        chart_df["Uneven Coating Rate (%)"].max(),
-        1,
-    )
-    offset = max_rate * 0.010
+    for idx, row in chart_df.iterrows():
+        ax.annotate(
+            f"{row['Standard Label']}\nn={int(row['Coil_Count'])}",
+            (row["Position Below Limit Rate (%)"], row["Significant Over-Coating Rate (%)"]),
+            xytext=(6, 6),
+            textcoords="offset points",
+            fontsize=7.5,
+        )
 
-    for bars in [under_bars, over_bars, uneven_bars]:
-        for bar in bars:
-            value = bar.get_width()
-            ax.text(
-                value + offset,
-                bar.get_y() + bar.get_height() / 2,
-                f"{value:.1f}%",
-                va="center",
-                ha="left",
-                fontsize=7.5,
-            )
+    ax.set_title(f"{coating_type} — Coating Risk Matrix", pad=18)
+    ax.set_xlabel("Under-Coating Risk Rate (%) → Quality Risk")
+    ax.set_ylabel("Significant Over-Coating Rate (%) → Cost Risk")
+    ax.set_xlim(-3, 103)
+    ax.set_ylim(-3, 103)
+    ax.grid(True, alpha=0.25)
 
-    ax.set_xlim(0, max(100, max_rate * 1.16))
+    ax.text(2, 98, "High cost risk", va="top", fontsize=9, fontweight="bold")
+    ax.text(98, 98, "Critical: quality + cost", va="top", ha="right", fontsize=9, fontweight="bold")
+    ax.text(2, 2, "Low overall risk", va="bottom", fontsize=9, fontweight="bold")
+    ax.text(98, 2, "High quality risk", va="bottom", ha="right", fontsize=9, fontweight="bold")
+
+    colorbar = fig.colorbar(scatter, ax=ax, pad=0.02)
+    colorbar.set_label("Cross-Width Unevenness Risk Rate (%)")
+
+    # Bubble-size reference for coil count.
+    representative_counts = sorted(set([int(coil_count.min()), int(coil_count.median()), int(coil_count.max())]))
+    handles = []
+    labels = []
+    for count in representative_counts:
+        if coil_count.max() == coil_count.min():
+            marker_size = 320.0
+        else:
+            marker_size = size_min + (count - coil_count.min()) / (coil_count.max() - coil_count.min()) * (size_max - size_min)
+        handles.append(ax.scatter([], [], s=marker_size, facecolors="none", edgecolors="black"))
+        labels.append(f"n={count}")
+    ax.legend(handles, labels, title="Coil count", loc="lower left", frameon=True)
+
     return finalize_chart(fig)
 
 
@@ -513,10 +527,10 @@ def render_three_risk_guide() -> None:
         """
         **How to read**
 
-        - **Under-Coating:** any position is below the Lower Limit. Highest quality priority.
-        - **Over-Coating:** coil average exceeds Target by the selected allowance. Cost-saving opportunity.
-        - **Unevenness:** cross-width difference exceeds both relative and absolute limits. Check process balance.
-        - Groups with fewer than the minimum coil count should be treated as reference only.
+        - Move **right**: higher under-coating quality risk.
+        - Move **up**: higher significant over-coating cost risk.
+        - Darker bubble: higher cross-width unevenness risk.
+        - Larger bubble: more coils; results are more representative.
         """
     )
 
@@ -580,7 +594,7 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
         fig_risk = plot_three_risks_by_coating_type(c_summary, c_type)
         html += f"""
         <div class='chart-container'>
-            <h3>3. 三大風險優先分析 (Three-Risk Priority Overview)</h3>
+            <h3>3. 鍍層風險矩陣 (Coating Risk Matrix)</h3>
             <div class='risk-layout'>
                 <div class='risk-chart'><img src='data:image/png;base64,{fig_to_base64(fig_risk)}'></div>
                 <div class='risk-guide'>
@@ -784,7 +798,7 @@ if view_mode == "Overall View":
     st.header("Overall View")
     overall_section = st.radio(
         "Overall Section",
-        ["Target and Lower-Limit Difference", "Stability Analysis", "Three-Risk Analysis"],
+        ["Target and Lower-Limit Difference", "Stability Analysis", "Risk Matrix Analysis"],
         horizontal=True,
     )
     coating_types = sorted(summary_df["鍍製別"].dropna().astype(str).unique().tolist())
@@ -807,7 +821,7 @@ if view_mode == "Overall View":
             plt.close(fig)
             st.divider()
 
-    elif overall_section == "Three-Risk Analysis":
+    elif overall_section == "Risk Matrix Analysis":
         for coating_type in coating_types:
             c_summary = summary_df[summary_df["鍍製別"].astype(str) == coating_type].copy()
             st.subheader(f"Coating Type: {coating_type}")
