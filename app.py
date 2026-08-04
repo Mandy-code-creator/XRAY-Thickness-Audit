@@ -20,7 +20,7 @@ st.set_page_config(
 
 st.title("XRAY Coating Thickness Audit")
 st.success(
-    "Version 2026-07-31 COIL-LEVEL STANDARDIZED BUILD — "
+    "Version 2026-08-04 ALLOWABLE-MARGIN RISK BUILD — "
     "North / Center / South = Top + Back"
 )
 st.caption(
@@ -141,6 +141,12 @@ def calculate_derived_metrics(valid_df: pd.DataFrame) -> pd.DataFrame:
         valid["Cross-Width Range"] / valid["Coil Average Thickness"] * 100,
         np.nan,
     )
+    valid["Allowable Cross-Width Margin"] = valid["鍍層目標值"] - valid["鍍層下限值"]
+    valid["Cross-Width Margin Utilization (%)"] = np.where(
+        valid["Allowable Cross-Width Margin"].gt(0),
+        valid["Cross-Width Range"] / valid["Allowable Cross-Width Margin"] * 100,
+        np.nan,
+    )
     
     valid["Minimum Position"] = valid[position_columns].idxmin(axis=1).map({
         "North Thickness": "North",
@@ -219,30 +225,39 @@ def aggregate_to_one_row_per_coil(valid_df: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def build_group_summary(
     df: pd.DataFrame,
-    uneven_threshold_percent: float = 5.0,
-    uneven_absolute_threshold: float = 5.0,
+    cross_width_margin_limit_percent: float = 100.0,
     over_coating_threshold_percent: float = 3.0,
     high_stability_threshold: float = 3.0,
     medium_stability_threshold: float = 6.0,
     minimum_reliable_coils: int = 5,
 ) -> pd.DataFrame:
+    """Build one summary row per coating standard.
+
+    Cross-width variation is judged against the engineering allowance
+    (Target - Lower Limit), not against a fixed percent of thickness.
+    A coil is flagged only when its North/Center/South range consumes more
+    than the selected percentage of that allowance.
+    """
     if df.empty:
         return pd.DataFrame()
 
     working = df.copy()
     working["Below Lower Limit Flag"] = working["Any Position Below Lower Limit"].astype(int)
     working["Below Target Flag"] = working["Average Below Target"].astype(int)
-    working["At or Above Target Flag"] = (working["Coil Average Thickness"] >= working["鍍層目標值"]).astype(int)
+    working["At or Above Target Flag"] = (
+        working["Coil Average Thickness"] >= working["鍍層目標值"]
+    ).astype(int)
 
-    # Risk 1 — Under-coating: any North / Center / South position below Lower Limit.
+    # Risk 1 — Under-coating quality risk.
     working["Under-Coating Severity (%)"] = np.where(
         working["鍍層下限值"].ne(0),
-        np.maximum(working["鍍層下限值"] - working["Minimum Position Thickness"], 0)
-        / working["鍍層下限值"] * 100,
+        np.maximum(
+            working["鍍層下限值"] - working["Minimum Position Thickness"], 0
+        ) / working["鍍層下限值"] * 100,
         np.nan,
     )
 
-    # Risk 2 — Significant over-coating: average thickness exceeds Target by a meaningful allowance.
+    # Risk 2 — Significant over-coating cost risk.
     working["Over-Coating Margin (%)"] = np.where(
         working["鍍層目標值"].ne(0),
         (working["Coil Average Thickness"] - working["鍍層目標值"])
@@ -253,15 +268,20 @@ def build_group_summary(
         working["Over-Coating Margin (%)"] > over_coating_threshold_percent
     ).astype(int)
 
-    # Risk 3 — Cross-width unevenness: both relative and absolute differences must exceed limits.
-    working["Cross-Width Range vs Target (%)"] = np.where(
-        working["鍍層目標值"].ne(0),
-        working["Cross-Width Range"] / working["鍍層目標值"] * 100,
+    # Risk 3 — Cross-width variation relative to the allowable engineering margin.
+    # Allowable margin = Target - Lower Limit.
+    working["Allowable Cross-Width Margin"] = (
+        working["鍍層目標值"] - working["鍍層下限值"]
+    )
+    working["Cross-Width Margin Utilization (%)"] = np.where(
+        working["Allowable Cross-Width Margin"].gt(0),
+        working["Cross-Width Range"]
+        / working["Allowable Cross-Width Margin"] * 100,
         np.nan,
     )
-    working["Uneven Coating Flag"] = (
-        (working["Cross-Width Range vs Target (%)"] > uneven_threshold_percent)
-        & (working["Cross-Width Range"] > uneven_absolute_threshold)
+    working["Cross-Width Variation Flag"] = (
+        working["Cross-Width Margin Utilization (%)"]
+        > cross_width_margin_limit_percent
     ).astype(int)
 
     group_columns = ["鍍製別", "上鍍層", "鍍層目標值", "鍍層下限值"]
@@ -283,39 +303,59 @@ def build_group_summary(
             Coils_Below_Target=("Below Target Flag", "sum"),
             Coils_At_Or_Above_Target=("At or Above Target Flag", "sum"),
             Significant_Over_Coating_Coils=("Significant Over-Coating Flag", "sum"),
-            Uneven_Coating_Coils=("Uneven Coating Flag", "sum"),
+            Cross_Width_Variation_Coils=("Cross-Width Variation Flag", "sum"),
             Average_Cross_Width_Range=("Cross-Width Range", "mean"),
             Average_Cross_Width_Range_Percent=("Cross-Width Range (%)", "mean"),
+            Average_Allowable_Cross_Width_Margin=("Allowable Cross-Width Margin", "mean"),
+            Average_Cross_Width_Margin_Utilization=("Cross-Width Margin Utilization (%)", "mean"),
+            Median_Cross_Width_Margin_Utilization=("Cross-Width Margin Utilization (%)", "median"),
         ).reset_index()
     )
 
     summary["Thickness_Std"] = summary["Thickness_Std"].fillna(0)
     summary["Target_Deviation_Std"] = summary["Target_Deviation_Std"].fillna(0)
-    summary["Target_Deviation_P10_P90_Range"] = summary["Target_Deviation_P90"] - summary["Target_Deviation_P10"]
-    summary["Deviation_CV_vs_Target (%)"] = np.where(summary["鍍層目標值"] != 0, summary["Target_Deviation_Std"] / summary["鍍層目標值"] * 100, np.nan)
-    summary["Position Below Limit Rate (%)"] = summary["Coils_With_Position_Below_Limit"] / summary["Coil_Count"] * 100
-    summary["Below Target Rate (%)"] = summary["Coils_Below_Target"] / summary["Coil_Count"] * 100
-    summary["At or Above Target Rate (%)"] = summary["Coils_At_Or_Above_Target"] / summary["Coil_Count"] * 100
-    summary["Significant Over-Coating Rate (%)"] = summary["Significant_Over_Coating_Coils"] / summary["Coil_Count"] * 100
-    summary["Uneven Coating Rate (%)"] = summary["Uneven_Coating_Coils"] / summary["Coil_Count"] * 100
-    summary["Uneven Relative Threshold (%)"] = uneven_threshold_percent
-    summary["Uneven Absolute Threshold"] = uneven_absolute_threshold
+    summary["Target_Deviation_P10_P90_Range"] = (
+        summary["Target_Deviation_P90"] - summary["Target_Deviation_P10"]
+    )
+    summary["Deviation_CV_vs_Target (%)"] = np.where(
+        summary["鍍層目標值"] != 0,
+        summary["Target_Deviation_Std"] / summary["鍍層目標值"] * 100,
+        np.nan,
+    )
+    summary["Position Below Limit Rate (%)"] = (
+        summary["Coils_With_Position_Below_Limit"] / summary["Coil_Count"] * 100
+    )
+    summary["Below Target Rate (%)"] = (
+        summary["Coils_Below_Target"] / summary["Coil_Count"] * 100
+    )
+    summary["At or Above Target Rate (%)"] = (
+        summary["Coils_At_Or_Above_Target"] / summary["Coil_Count"] * 100
+    )
+    summary["Significant Over-Coating Rate (%)"] = (
+        summary["Significant_Over_Coating_Coils"] / summary["Coil_Count"] * 100
+    )
+    summary["Cross-Width Variation Risk Rate (%)"] = (
+        summary["Cross_Width_Variation_Coils"] / summary["Coil_Count"] * 100
+    )
+    summary["Cross-Width Margin Limit (%)"] = cross_width_margin_limit_percent
     summary["Over-Coating Threshold (%)"] = over_coating_threshold_percent
 
-    # Priority score: quality risk receives the highest weight, followed by equipment stability and cost.
+    # Priority score: quality risk receives the highest weight, followed by
+    # cross-width process risk and significant over-coating cost risk.
     summary["Risk Priority Score"] = (
         summary["Position Below Limit Rate (%)"] * 0.50
-        + summary["Uneven Coating Rate (%)"] * 0.30
+        + summary["Cross-Width Variation Risk Rate (%)"] * 0.30
         + summary["Significant Over-Coating Rate (%)"] * 0.20
     )
 
     risk_columns = {
         "Under-Coating": "Position Below Limit Rate (%)",
         "Over-Coating": "Significant Over-Coating Rate (%)",
-        "Unevenness": "Uneven Coating Rate (%)",
+        "Cross-Width Variation": "Cross-Width Variation Risk Rate (%)",
     }
     summary["Main Risk"] = summary.apply(
-        lambda row: max(risk_columns, key=lambda name: row[risk_columns[name]]), axis=1
+        lambda row: max(risk_columns, key=lambda name: row[risk_columns[name]]),
+        axis=1,
     )
     summary["Risk Priority"] = np.select(
         [
@@ -327,9 +367,18 @@ def build_group_summary(
         ["Insufficient Data", "Critical", "High", "Medium"],
         default="Low",
     )
-    summary["Relative Stability Variation (%)"] = np.where(summary["鍍層目標值"] != 0, summary["Target_Deviation_Std"] / summary["鍍層目標值"] * 100, np.nan)
-    summary["Relative P10-P90 Range (%)"] = np.where(summary["鍍層目標值"] != 0, summary["Target_Deviation_P10_P90_Range"] / summary["鍍層目標值"] * 100, np.nan)
-    
+
+    summary["Relative Stability Variation (%)"] = np.where(
+        summary["鍍層目標值"] != 0,
+        summary["Target_Deviation_Std"] / summary["鍍層目標值"] * 100,
+        np.nan,
+    )
+    summary["Relative P10-P90 Range (%)"] = np.where(
+        summary["鍍層目標值"] != 0,
+        summary["Target_Deviation_P10_P90_Range"]
+        / summary["鍍層目標值"] * 100,
+        np.nan,
+    )
     summary["Stability Grade"] = np.select(
         [
             summary["Coil_Count"] < minimum_reliable_coils,
@@ -339,7 +388,6 @@ def build_group_summary(
         ["Insufficient Data", "High Stability", "Medium Stability"],
         default="Low Stability",
     )
-
     summary["Stability Threshold High (%)"] = high_stability_threshold
     summary["Stability Threshold Medium (%)"] = medium_stability_threshold
     summary["Minimum Reliable Coils"] = minimum_reliable_coils
@@ -463,19 +511,19 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     risk_columns = [
         "Position Below Limit Rate (%)",
         "Significant Over-Coating Rate (%)",
-        "Uneven Coating Rate (%)",
+        "Cross-Width Variation Risk Rate (%)",
         "Risk Priority Score",
     ]
     count_columns = [
         "Coils_With_Position_Below_Limit",
         "Significant_Over_Coating_Coils",
-        "Uneven_Coating_Coils",
+        "Cross_Width_Variation_Coils",
         None,
     ]
     column_labels = [
         "Under-Coating\nQuality Risk",
         "Over-Coating\nCost Risk",
-        "Cross-Width\nUnevenness",
+        "Cross-Width Range\nvs Allowable Margin",
         "Priority\nScore",
     ]
 
@@ -486,7 +534,7 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
     chart_df["Coil_Count"] = pd.to_numeric(chart_df["Coil_Count"], errors="coerce").fillna(0).astype(int)
 
     chart_df = chart_df.sort_values(
-        ["Risk Priority Score", "Position Below Limit Rate (%)", "Uneven Coating Rate (%)"],
+        ["Risk Priority Score", "Position Below Limit Rate (%)", "Cross-Width Variation Risk Rate (%)"],
         ascending=[False, False, False],
     ).reset_index(drop=True)
 
@@ -563,13 +611,13 @@ def plot_three_risks_by_coating_type(coating_summary: pd.DataFrame, coating_type
         spine.set_color("#697985")
 
     colorbar = fig.colorbar(image, ax=ax, pad=0.025, fraction=0.035)
-    colorbar.set_label("Risk Rate / Priority Score (%)", fontsize=10.5, labelpad=10)
+    colorbar.set_label("Flagged-Coil Rate / Priority Score (%)", fontsize=10.5, labelpad=10)
     colorbar.ax.tick_params(labelsize=9.5)
     colorbar.outline.set_linewidth(0.8)
     colorbar.outline.set_edgecolor("#697985")
 
     ax.set_xlabel(
-        "Each risk cell shows affected coils / total coils and the corresponding rate. "
+        "Each risk cell shows flagged coils / total coils and the corresponding rate. "
         "Priority Score is a weighted index.",
         labelpad=18,
         fontsize=10.5,
@@ -582,12 +630,11 @@ def render_three_risk_guide() -> None:
         """
         **How to read**
 
-        - `Affected / Total coils` shows the actual number of coils flagged for that risk.
-        - The percentage below it is the corresponding risk rate.
+        - `Flagged / Total coils` shows the actual number of coils exceeding each risk rule.
+        - **Cross-Width Range vs Allowable Margin** compares `(Max − Min)` with `Target − Lower Limit`.
+        - A coil is flagged only when that utilization exceeds the selected limit (default: 100%).
         - **Priority Score** is a weighted index, not a defective-coil rate.
-        - Darker cells indicate higher risk.
-        - Rows are ranked from highest to lowest Priority Score.
-        - Results with very small total coil counts should be treated as reference only.
+        - Darker cells indicate a higher flagged-coil rate; small samples are reference only.
         """
     )
 
@@ -657,7 +704,9 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
                 <div class='risk-guide'>
                     <h4>How to read</h4>
                     <ul>
-                        <li>Each risk cell shows <strong>affected coils / total coils</strong> and the corresponding rate.</li>
+                        <li>Each risk cell shows <strong>flagged coils / total coils</strong> and the corresponding rate.</li>
+                        <li><strong>Cross-Width Range vs Allowable Margin</strong> compares (Max − Min) with (Target − Lower Limit).</li>
+                        <li>A coil is flagged only when the selected margin-utilization limit is exceeded.</li>
                         <li><strong>Priority Score</strong> is a weighted index, not a defective-coil rate.</li>
                         <li>Darker cells indicate higher risk.</li>
                         <li>Rows are ranked by Priority Score from high to low.</li>
@@ -673,7 +722,8 @@ def create_html_report(summary_df: pd.DataFrame, filtered_df: pd.DataFrame) -> s
             "上鍍層", "鍍層目標值", "鍍層下限值", "Coil_Count",
             "Coils_With_Position_Below_Limit", "Position Below Limit Rate (%)",
             "Significant_Over_Coating_Coils", "Significant Over-Coating Rate (%)",
-            "Uneven_Coating_Coils", "Uneven Coating Rate (%)",
+            "Cross_Width_Variation_Coils", "Cross-Width Variation Risk Rate (%)",
+            "Average_Allowable_Cross_Width_Margin", "Average_Cross_Width_Margin_Utilization",
             "Risk Priority Score", "Main Risk", "Risk Priority", "Stability Grade",
         ]
         table_html = c_summary[table_cols].sort_values("Risk Priority Score", ascending=False).to_html(
@@ -797,18 +847,22 @@ filtered_df = filtered_df.sort_values(["鍍製別", "上鍍層", "訂單號碼",
 # 12. KPI AND SUMMARY
 # =========================================================
 if view_mode == "Overall View":
-    risk_col1, risk_col2, risk_col3 = st.columns(3)
+    risk_col1, risk_col2 = st.columns(2)
     with risk_col1:
         over_coating_threshold_percent = st.slider(
             "Significant Over-Coating Allowance (%)", 0.5, 15.0, 3.0, 0.5
         )
     with risk_col2:
-        uneven_threshold_percent = st.slider(
-            "Cross-Width Relative Threshold (% of Target)", 1.0, 20.0, 5.0, 0.5
-        )
-    with risk_col3:
-        uneven_absolute_threshold = st.number_input(
-            "Cross-Width Absolute Threshold", 0.1, 100.0, 5.0, 0.5
+        cross_width_margin_limit_percent = st.slider(
+            "Cross-Width Allowable-Margin Utilization Limit (%)",
+            25.0,
+            200.0,
+            100.0,
+            5.0,
+            help=(
+                "100% means the North/Center/South range equals Target minus Lower Limit. "
+                "Only coils above this limit are flagged."
+            ),
         )
 
     stability_col1, stability_col2, stability_col3 = st.columns(3)
@@ -820,16 +874,14 @@ if view_mode == "Overall View":
         minimum_reliable_coils = st.number_input("Minimum Coil Count for Judgment", 2, 100, 5, 1)
 else:
     over_coating_threshold_percent = 3.0
-    uneven_threshold_percent = 5.0
-    uneven_absolute_threshold = 5.0
+    cross_width_margin_limit_percent = 100.0
     high_stability_threshold = 3.0
     medium_stability_threshold = 6.0
     minimum_reliable_coils = 5
 
 summary_df = build_group_summary(
     filtered_df,
-    uneven_threshold_percent=uneven_threshold_percent,
-    uneven_absolute_threshold=uneven_absolute_threshold,
+    cross_width_margin_limit_percent=cross_width_margin_limit_percent,
     over_coating_threshold_percent=over_coating_threshold_percent,
     high_stability_threshold=high_stability_threshold,
     medium_stability_threshold=medium_stability_threshold,
